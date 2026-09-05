@@ -72,3 +72,24 @@ test('receipt deletion is limited to its sender while admin can delete any recei
   assert.equal(b.post({action:'deleteReceipt',sessionToken:admin.token,id:other.id}).ok,true);
   assert.equal(b.rows.Receipts.length,1);
 });
+
+test('receipt updates are limited to its sender while admin can update any receipt, and history is listable',()=>{
+  const b=backend();
+  assert.equal(b.post({action:'bootstrapAdmin',accessCode:'testing-code-123456',username:'admin',password:'AdminPass123'}).ok,true);
+  const admin=b.post({action:'login',username:'admin',password:'AdminPass123'});
+  assert.equal(b.post({action:'upsertUser',sessionToken:admin.token,user:{username:'WH-001',password:'Receiver123',role:'receiver',active:true}}).ok,true);
+  assert.equal(b.post({action:'upsertUser',sessionToken:admin.token,user:{username:'WH-002',password:'Receiver234',role:'receiver',active:true}}).ok,true);
+  const senderOne=b.post({action:'login',username:'WH-001',password:'Receiver123'});
+  const senderTwo=b.post({action:'login',username:'WH-002',password:'Receiver234'});
+  assert.equal(b.post({action:'receive',sessionToken:senderOne.token,receipt:{...sample}}).ok,true);
+  const other={...sample,id:'22222222-2222-4222-8222-222222222222',rawQR:'QR-auth-002',employee:'WH-002'};
+  assert.equal(b.post({action:'receive',sessionToken:senderTwo.token,receipt:other}).ok,true);
+  const changed={...sample,materialCode:'000999',quantity:30,employee:'WH-001'};
+  assert.equal(b.post({action:'updateReceipt',sessionToken:senderOne.token,receipt:changed}).ok,true);
+  assert.equal(b.rows.Receipts[1][5],'000999');
+  assert.equal(b.post({action:'updateReceipt',sessionToken:senderOne.token,receipt:{...other,materialCode:'NOPE'}}).ok,false);
+  assert.equal(b.post({action:'updateReceipt',sessionToken:admin.token,receipt:{...other,materialCode:'ADMIN-EDIT',employee:'WH-002'}}).ok,true);
+  assert.equal(b.rows.Receipts[2][5],'ADMIN-EDIT');
+  const history=b.post({action:'listReceipts',sessionToken:senderOne.token});
+  assert.equal(history.ok,true); assert.equal(history.receipts.length,2); assert.equal(history.receipts[0].materialCode,'ADMIN-EDIT');
+});
