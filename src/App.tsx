@@ -33,6 +33,7 @@ export default function App(){
   const [sending,setSending]=useState(false);
   const [testing,setTesting]=useState(false);
   const busy=useRef(false);
+  const syncTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
   const video=useRef<HTMLVideoElement>(null);
   const scanner=useRef<QrScanner|null>(null);
   const file=useRef<HTMLInputElement>(null);
@@ -42,6 +43,7 @@ export default function App(){
   const completed=records.filter(r=>r.status==='synced'&&new Date(r.createdAt).toLocaleDateString('en-CA')===today);
   const flash=(message:string,type:'success'|'error'|'info'='info')=>setNotice({message,type});
   function saveRecords(next:Receipt[]){put(KEY+'-records',next);recordRef.current=next;setRecords(next);}
+  function scheduleSync(){if(!online)return;if(syncTimer.current)clearTimeout(syncTimer.current);syncTimer.current=setTimeout(()=>{syncTimer.current=null;void syncAll();},700);}
   useEffect(()=>{fetch('./config.json').then(r=>r.json()).then((data:Config)=>{if(data.apiUrl&&!read<Config>(KEY+'-config',{apiUrl:'',sheetUrl:''}).apiUrl){setConfig(data);setConfigDraft(data);}}).catch(()=>{});},[]);
   useEffect(()=>{const update=()=>setOnline(navigator.onLine);window.addEventListener('online',update);window.addEventListener('offline',update);return()=>{window.removeEventListener('online',update);window.removeEventListener('offline',update);};},[]);
   useEffect(()=>{const update=(event:StorageEvent)=>{if(event.key===KEY+'-records'){const next=read<Receipt[]>(KEY+'-records',[]);recordRef.current=next;setRecords(next);}};window.addEventListener('storage',update);return()=>window.removeEventListener('storage',update);},[]);
@@ -84,7 +86,7 @@ export default function App(){
     if(recordRef.current.some(r=>r.rawQR===rawQR)){flash('QR นี้อยู่ในประวัติแล้ว','error');return;}
     try{put(KEY+'-employee',employee.trim());put(KEY+'-destination',{warehouse:fields.warehouse,location:fields.location});saveRecords([receipt,...recordRef.current]);setRawQR('');setFields({...empty,warehouse:fields.warehouse,location:fields.location});}
     catch{flash('พื้นที่จัดเก็บในเครื่องไม่พร้อม ยังไม่ได้บันทึก กรุณาตรวจเบราว์เซอร์','error');return;}
-    if(navigator.onLine){flash('รับเข้าคิวแล้ว กำลังส่ง Google Sheets…','info');void syncAll();if(quickMode)setScanning(true);}else flash('เก็บรายการไว้ในเครื่องแล้ว เมื่อมีอินเทอร์เน็ตให้กด “ส่งรายการรอ”','info');
+    if(navigator.onLine){flash('รับเข้าคิวแล้ว กำลังส่ง Google Sheets…','info');scheduleSync();if(quickMode)setScanning(true);}else flash('เก็บรายการไว้ในเครื่องแล้ว เมื่อมีอินเทอร์เน็ตให้กด “ส่งรายการรอ”','info');
   }
   const field=(key:keyof Fields,label:string,required=false,placeholder='',type='text')=><label className={key==='materialName'||key==='notes'?'wide':''}>{label}{required&&<span className="required"> *</span>}<input type={type} required={required} value={fields[key]} onChange={e=>setFields({...fields,[key]:e.target.value})} placeholder={placeholder} maxLength={500} {...(type==='number'?{min:0.001,step:'any',inputMode:'decimal' as const}:{})}/></label>;
   const navigation=(<><button className={view==='scan'?'active':''} onClick={()=>setView('scan')}><ScanLine size={20}/><span>รับพาร์ท</span><ChevronRight className="nav-arrow" size={16}/></button><button className={view==='history'?'active':''} onClick={()=>setView('history')}><History size={20}/><span>ประวัติการรับ</span>{pending.length>0&&<b className="count">{pending.length}</b>}</button><button className={view==='settings'?'active':''} onClick={()=>{setConfigDraft(config);setView('settings');}}><Settings size={20}/><span>ตั้งค่า</span></button></>);
