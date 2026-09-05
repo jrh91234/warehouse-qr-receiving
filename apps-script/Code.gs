@@ -225,6 +225,8 @@ function equal_(a,b){var mismatch=a.length^b.length;for(var i=0;i<Math.max(a.len
 function iframe_(body,requestId,origin) {
   var target=/^https:\/\/jrh91234\.github\.io$/.test(origin)||/^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/.test(origin)?origin:'https://jrh91234.github.io';
   var message=JSON.stringify({type:'wh-receive-response',requestId:requestId,result:body}).replace(/</g,'\\u003c').replace(/>/g,'\\u003e').replace(/&/g,'\\u0026').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
-  return HtmlService.createHtmlOutput('<!doctype html><html><body><script>window.parent.postMessage('+message+','+JSON.stringify(target)+');<\/script></body></html>');
+  // ALLOWALL is required: the page is framed by the app on another origin (GitHub Pages), and the default
+  // mode sends X-Frame-Options: SAMEORIGIN, which makes Google refuse the framed response with a 403.
+  return HtmlService.createHtmlOutput('<!doctype html><html><body><script>window.parent.postMessage('+message+','+JSON.stringify(target)+');<\/script></body></html>').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 function json_(body){return ContentService.createTextOutput(JSON.stringify(body)).setMimeType(ContentService.MimeType.JSON);}
