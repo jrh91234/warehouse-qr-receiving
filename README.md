@@ -48,7 +48,7 @@ Endpoint เปิดสำหรับเข้าถึงจากโทร�
 Material code: PART-DEMO-001|Lot number: LOT-001|Quantity: 25|Unit: EA
 ```
 
-ป้าย Warehouse แบบในรูปใช้รูปแบบ `MaterialCode*LotNumber*PackageReference` เช่น `1005QT00197*2026083001*0002-2` แอปจะแยก Material code และ Lot number ให้ และตั้ง Quantity เป็น 1 EA ตามป้าย ตัวเลขท้ายใช้ตรวจสอบอ้างอิงแพ็กเกจและเก็บซ้ำใน Raw QR
+ป้าย Warehouse แบบในรูปใช้รูปแบบ `MaterialCode*LotNumber*Quantity*PackageReference` เช่น `1005QT00197*2026083001*10*0002-2` แอปจะแยก Material code, Lot number และ Quantity (`10`) ให้อัตโนมัติ พร้อมตั้ง Unit เป็น EA ส่วนตัวเลขท้ายเป็นรหัสอ้างอิงแพ็กเกจและยังเก็บครบใน Raw QR ถ้าไม่มีรหัสแพ็กเกจ รูปแบบ `MaterialCode*LotNumber*Quantity` ก็รองรับเช่นกัน
 
 รหัสแบบต่อกันซึ่งไม่ทราบโครงสร้างจะเก็บข้อความเดิมทั้งหมด แล้วให้ผู้ใช้กรอกข้อมูลตามป้าย ไม่มีการเดาความยาวรหัสพาร์ท/ล็อต และไม่มีการเดาข้อมูลจากรูปถ่าย ป้ายตัวอย่างที่แนบไม่ได้ถูกรวมใน public repository
 

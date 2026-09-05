@@ -23,11 +23,13 @@ export function parseQR(raw) {
     const item = Object.entries(source).find(([key]) => aliases.includes(normalized(key)));
     if(item && ['string','number'].includes(typeof item[1])) data[field] = String(item[1]).trim();
   }
-  // The warehouse labels also use: materialCode*lotNumber*packageReference.
-  // The final token identifies the package; quantity on this label is one EA.
+  // Warehouse labels use: materialCode*lotNumber*quantity[*packageReference].
+  // Some labels add a fourth package-reference token after the quantity.
   if(!Object.keys(data).length) {
-    const star = text.match(/^([^*]{2,80})\*([A-Za-z0-9_-]{2,80})\*([^*]{1,80})$/);
-    if(star) { data.materialCode=star[1].trim(); data.lotNumber=star[2].trim(); data.quantity='1'; data.unit='EA'; }
+    const star = text.split('*').map(part => part.trim());
+    if(star.length >= 3 && /^[^*]{2,80}$/.test(star[0]) && /^[A-Za-z0-9_-]{2,80}$/.test(star[1]) && /^\d+(?:\.\d+)?$/.test(star[2])) {
+      data.materialCode=star[0]; data.lotNumber=star[1]; data.quantity=star[2]; data.unit='EA';
+    }
   }
   return {data, raw: text, recognized: Object.keys(data).length > 0};
 }
