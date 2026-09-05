@@ -70,12 +70,29 @@ export default function App(){
     setRawQR(parsed.raw);setRecognized(parsed.recognized);setFields({...empty,...read(KEY+'-destination',{}),...parsed.data});setManual(false);setManualText('');setView('scan');setNotice(null);navigator.vibrate?.(100);
     }catch(e){flash((e as Error).message,'error');}
   }
+  function postThroughFrame(apiUrl:string,payload:object){
+    return new Promise<any>((resolve,reject)=>{
+      const requestId=crypto.randomUUID();
+      const frame=document.createElement('iframe');
+      const formElement=document.createElement('form');
+      const timeout=window.setTimeout(()=>finish(new Error('การเชื่อมต่อใช้เวลานานเกินไป กรุณาลองอีกครั้ง')),30000);
+      frame.name='wh-receive-'+requestId;frame.hidden=true;frame.title='WH Receive response';
+      formElement.method='post';formElement.action=apiUrl;formElement.target=frame.name;formElement.hidden=true;
+      const add=(name:string,value:string)=>{const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;formElement.append(input);};
+      add('transport','iframe');add('requestId',requestId);add('origin',window.location.origin);add('payload',JSON.stringify(payload));
+      const onMessage=(event:MessageEvent)=>{
+        if(event.source!==frame.contentWindow||!event.data||event.data.type!=='wh-receive-response'||event.data.requestId!==requestId)return;
+        finish(null,event.data.result);
+      };
+      function finish(error:Error|null,result?:any){window.clearTimeout(timeout);window.removeEventListener('message',onMessage);formElement.remove();frame.remove();if(error)reject(error);else resolve(result);}
+      window.addEventListener('message',onMessage);document.body.append(frame,formElement);formElement.submit();
+    });
+  }
   async function request(apiUrl:string,body:object,includeCredentials=true){
     if(!validApiUrl(apiUrl))throw new Error('ยังไม่ได้เชื่อมต่อระบบ กรุณาตั้งค่า Web App URL');
     const credentials=includeCredentials?(sessionToken?{sessionToken}:accessCode.trim()?{accessCode}:{}):{};
-    const response=await fetch(apiUrl,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...body,...credentials}),redirect:'follow',signal:AbortSignal.timeout(30000)});
-    if(!response.ok)throw new Error('ติดต่อ Google Sheets ไม่สำเร็จ');
-    const result=await response.json();if(!result.ok)throw new Error(result.message||'บันทึกไม่สำเร็จ');return result;
+    const result=await postThroughFrame(apiUrl,{...body,...credentials});
+    if(!result||!result.ok)throw new Error(result?.message||'ติดต่อ Google Sheets ไม่สำเร็จ');return result;
   }
   async function login(event:React.FormEvent){
     event.preventDefault();setAuthBusy(true);

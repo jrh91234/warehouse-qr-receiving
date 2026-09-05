@@ -33,7 +33,7 @@
 
 เมื่อเปิดหน้า Admin panel ระบบจะสร้างแท็บ `Users` ให้อัตโนมัติ โดยมีหัวตาราง `Username, Password hash, Role, Active, Created at, Last login` ไม่ต้องสร้างเอง รหัสผ่านจะเก็บเป็นแฮชในชีตและ session ของผู้ใช้เก็บชั่วคราวใน Apps Script Cache
 
-Endpoint เปิดสำหรับเข้าถึงจากโทรศัพท์ แต่คำสั่ง Login เปิดให้ตรวจสอบบัญชีได้ ส่วนการอ่าน/เขียนข้อมูลและจัดการผู้ใช้ต้องใช้ session ของผู้ใช้หรือ `ACCESS_CODE` แบบเก่าสำหรับความเข้ากันได้ ชีตยังคงเป็นไฟล์ส่วนตัว ไม่ต้องเปิดชีตสาธารณะ
+Endpoint เปิดสำหรับเข้าถึงจากโทรศัพท์ แต่คำสั่ง Login เปิดให้ตรวจสอบบัญชีได้ ส่วนการอ่าน/เขียนข้อมูลและจัดการผู้ใช้ต้องใช้ session ของผู้ใช้หรือ `ACCESS_CODE` แบบเก่าสำหรับความเข้ากันได้ ชีตยังคงเป็นไฟล์ส่วนตัว ไม่ต้องเปิดชีตสาธารณะ หน้าเว็บส่งคำขอผ่าน iframe form และรับผลด้วย `postMessage` เพราะ Content Service ของ Apps Script redirect ข้ามโดเมน จึงไม่ต้องพึ่ง CORS header หรือ proxy ภายนอก
 
 อ้างอิง: [Apps Script Web Apps](https://developers.google.com/apps-script/guides/web), [Content Service](https://developers.google.com/apps-script/guides/content)
 
