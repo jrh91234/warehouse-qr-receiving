@@ -7,6 +7,36 @@ const fields = {
   quantity: ['quantity','qty','จำนวน'], unit: ['unit','หน่วย']
 };
 export const LOCATION_CODES = Array.from({length: 100}, (_, index) => `FR${String(index + 1).padStart(3, '0')}`);
+export const WAREHOUSE_OPTIONS = [
+  {code:'CK001', chinese:'原材料库', thai:'คลังวัตถุดิบ'},
+  {code:'CK005', chinese:'半成品库-待冲压', thai:'คลังสินค้ากึ่งสำเร็จรูป-รอปั๊มขึ้นรูป'},
+  {code:'CK006', chinese:'半成品库-待折弯', thai:'คลังสินค้ากึ่งสำเร็จรูป-รอพับ'},
+  {code:'CK007', chinese:'半成品库-待焊接', thai:'คลังสินค้ากึ่งสำเร็จรูป-รอเชื่อม'},
+  {code:'CK008', chinese:'半成品库-待喷涂', thai:'คลังสินค้ากึ่งสำเร็จรูป-รอพ่นสี'},
+  {code:'CK010', chinese:'半成品库-待委外', thai:'คลังสินค้ากึ่งสำเร็จรูป-รอส่งผลิตภายนอก'},
+  {code:'CK014', chinese:'镀后半成品库', thai:'คลังสินค้ากึ่งสำเร็จรูปหลังชุบ'},
+  {code:'CK015', chinese:'电气半成品库-待后序', thai:'คลังสินค้ากึ่งสำเร็จรูปแผนกไฟฟ้า-รอกระบวนการถัดไป'},
+  {code:'CK016', chinese:'汽车半成品库-待后序', thai:'คลังสินค้ากึ่งสำเร็จรูปยานยนต์-รอกระบวนแพ็ค'},
+  {code:'CK018', chinese:'汽车半成品库-待全选', thai:'คลังสินค้ากึ่งสำเร็จรูปยานยนต์-รอตรวจคัด 100%'},
+  {code:'CK019', chinese:'铝压铸半成品库-待全选', thai:'คลังสินค้ากึ่งสำเร็จรูปอะลูมิเนียม-รอตรวจคัด 100%'},
+  {code:'CK017', chinese:'铝压铸半成品库-待后序', thai:'คลังสินค้ากึ่งสำเร็จรูปอะลูมิเนียม-รอกระบวนการถัดไป'},
+  {code:'CK022', chinese:'铝压铸-成品库', thai:'คลังสินค้าสำเร็จรูปอะลูมิเนียม'},
+  {code:'CK024', chinese:'不良品库', thai:'คลังสินงานเสีย'},
+  {code:'CK011', chinese:'铝压铸半成品库-待打磨', thai:'คลังสินค้ากึ่งสำเร็จรูปอะลูมิเนียม-รอขัด'},
+  {code:'CK012', chinese:'铝压铸半成品库-待机加工', thai:'คลังสินค้ากึ่งสำเร็จรูปอะลูมิเนียม-รอ CNC'},
+  {code:'', chinese:'粉末库', thai:'คลังผงสี'},
+  {code:'CK009', chinese:'半成品库-待组装', thai:'คลังสินค้ากึ่งสำเร็จรูป-รอประกอบ'},
+  {code:'CK020', chinese:'电气-成品库', thai:'คลังสินค้าสำเร็จรูปไฟฟ้าอิเล็ก'},
+  {code:'CK021', chinese:'汽车-成品库', thai:'คลังสินค้าสำเร็จรูปยานยนต์'},
+  {code:'CK002', chinese:'外购件库', thai:'คลังชิ้นส่วนจัดซื้อภายนอก'},
+  {code:'CK003', chinese:'客供料库', thai:'คลังวัสดุที่ลูกค้า'},
+  {code:'CK004', chinese:'辅材库', thai:'คลังวัสดุเสริม'},
+  {code:'CK025', chinese:'废品库', thai:'คลังของ scrap'},
+  {code:'CK026', chinese:'封存库', thai:'คลังสินค้ากักเก็บ'},
+  {code:'CK027', chinese:'委外-封存库', thai:'คลังงานผลิตภายนอก-กักเก็บ'},
+  {code:'CK023', chinese:'呆滞品库', thai:'คลังสินค้าคงค้าง'},
+  {code:'CK013', chinese:'委外-车间库', thai:'คลังงานผลิตภายนอก-พื้นที่โรงงาน'}
+];
 const normalized = key => key.toLowerCase().replace(/[\s_\-]/g, '');
 export function parseQR(raw) {
   const text = String(raw).trim();
