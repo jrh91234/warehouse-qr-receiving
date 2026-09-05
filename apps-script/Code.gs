@@ -1,28 +1,44 @@
 /** WH Receive backend. Set SPREADSHEET_ID and ACCESS_CODE in Script Properties. */
 var RECEIPT_HEADERS = ['Request ID','Received at','Scanned at','Employee','Raw QR','Material code','Material name','Specification','Lot number','Warehouse','Location','Quantity','Unit','Notes'];
+var USER_HEADERS = ['Username','Password hash','Role','Active','Created at','Last login'];
+var SESSION_TTL_SECONDS = 21600;
 
 function doGet() {
-  return json_({ok:true,service:'WH Receive',version:'1.0.0'});
+  return json_({ok:true,service:'WH Receive',version:'1.2.0'});
+}
+
+// Run once from the Apps Script editor to set the spreadsheet and shared bootstrap code.
+function configureBackend_(spreadsheetId,accessCode) {
+  if(typeof spreadsheetId!=='string'||!/^[A-Za-z0-9_-]{20,}$/.test(spreadsheetId)) throw new Error('Invalid spreadsheet id');
+  if(typeof accessCode!=='string'||accessCode.length<12) throw new Error('ACCESS_CODE must be at least 12 characters');
+  SpreadsheetApp.openById(spreadsheetId).getSheets();
+  PropertiesService.getScriptProperties().setProperties({SPREADSHEET_ID:spreadsheetId,ACCESS_CODE:accessCode},true);
+  return {ok:true,spreadsheetId:spreadsheetId};
 }
 
 function doPost(e) {
   try {
     if(!e || !e.postData || e.postData.contents.length > 160000) throw new Error('คำขอไม่ถูกต้อง');
-    var body=JSON.parse(e.postData.contents);
-    var properties=PropertiesService.getScriptProperties();
-    var secret=properties.getProperty('ACCESS_CODE');
-    if(!secret || secret.length<12) throw new Error('ผู้ดูแลยังไม่ได้ตั้งรหัสเข้าใช้งานอย่างน้อย 12 ตัวอักษร');
-    if(typeof body.accessCode!=='string' || !equal_(body.accessCode,secret)) throw new Error('รหัสเข้าใช้งานไม่ถูกต้อง');
-    var sheetId=properties.getProperty('SPREADSHEET_ID');
+    var body=JSON.parse(e.postData.contents), action=String(body.action||'');
+    var properties=PropertiesService.getScriptProperties(), sheetId=properties.getProperty('SPREADSHEET_ID');
     if(!sheetId) throw new Error('ผู้ดูแลยังไม่ได้ตั้ง SPREADSHEET_ID');
     var book=SpreadsheetApp.openById(sheetId);
+    if(action==='login') return login_(body,book,properties);
+    if(action==='bootstrapAdmin') {requireAccessCode_(body,properties);return bootstrapAdmin_(body,book,properties);}
+    var auth=authorize_(body,properties);
+    if(action==='logout') return logout_(body);
+    if(action==='listUsers') return listUsers_(auth,book);
+    if(action==='upsertUser') return upsertUser_(auth,body,book,properties);
+    if(action==='deleteUser') return deleteUser_(auth,body,book);
     var sheet=book.getSheetByName('Receipts');
     if(!sheet) throw new Error('ไม่พบแท็บ Receipts กรุณาให้ผู้ดูแลตรวจสอบ');
     if(sheet.getRange(1,1,1,RECEIPT_HEADERS.length).getValues()[0].join('|')!==RECEIPT_HEADERS.join('|')) throw new Error('หัวตาราง Receipts ไม่ตรงกับระบบ กรุณาให้ผู้ดูแลตรวจสอบ');
-    if(body.action==='ping') return json_({ok:true,version:'1.0.0'});
-    if(body.action==='receiveBatch') return receiveBatch_(sheet,body.receipts);
-    if(body.action!=='receive') throw new Error('คำสั่งไม่ถูกต้อง');
-    var receipt=validate_(body.receipt);
+    if(action==='ping') return json_({ok:true,version:'1.2.0',user:auth.username||null});
+    if(action==='receiveBatch') return receiveBatch_(sheet,body.receipts,auth);
+    if(action!=='receive') throw new Error('คำสั่งไม่ถูกต้อง');
+    var receipt=body.receipt||{};
+    if(auth.username) receipt.employee=auth.username;
+    receipt=validate_(receipt);
     var lock=LockService.getScriptLock();
     if(!lock.tryLock(25000)) throw new Error('มีรายการรับเข้าพร้อมกัน กรุณาลองส่งอีกครั้ง');
     try {
@@ -49,9 +65,96 @@ function doPost(e) {
   } catch(error) {return json_({ok:false,message:error.message||'เกิดข้อผิดพลาดในการบันทึก'});}
 }
 
-function receiveBatch_(sheet,receipts) {
+function authorize_(body,properties) {
+  if(typeof body.sessionToken==='string'&&body.sessionToken) {
+    try {
+      var cached=CacheService.getScriptCache().get('wh-session-'+body.sessionToken);
+      if(cached) return JSON.parse(cached);
+    } catch(error) {}
+  }
+  requireAccessCode_(body,properties);
+  return {legacy:true};
+}
+function requireAccessCode_(body,properties) {
+  var secret=properties.getProperty('ACCESS_CODE');
+  if(!secret||secret.length<12) throw new Error('ผู้ดูแลยังไม่ได้ตั้งรหัสเข้าใช้งานอย่างน้อย 12 ตัวอักษร');
+  if(typeof body.accessCode!=='string'||!equal_(body.accessCode,secret)) throw new Error('รหัสเข้าใช้งานไม่ถูกต้อง');
+}
+function login_(body,book,properties) {
+  var username=String(body.username||'').trim(), password=String(body.password||'');
+  if(!/^[A-Za-z0-9._-]{2,100}$/.test(username)||password.length<8||password.length>128) throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+  var sheet=usersSheet_(book), row=findUser_(sheet,username);
+  if(!row||!isActive_(row.values[3])||!equal_(String(row.values[1]||''),passwordHash_(row.values[0],password,properties))) throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+  var now=new Date(); sheet.getRange(row.row,6).setValue(now);
+  var token=Utilities.getUuid().replace(/-/g,'')+Utilities.getUuid().replace(/-/g,'');
+  CacheService.getScriptCache().put('wh-session-'+token,JSON.stringify({username:String(row.values[0]),role:String(row.values[2]||'receiver')}),SESSION_TTL_SECONDS);
+  return json_({ok:true,token:token,user:{username:String(row.values[0]),role:String(row.values[2]||'receiver')}});
+}
+function bootstrapAdmin_(body,book,properties) {
+  var username=String(body.username||'').trim(), password=String(body.password||''), sheet=usersSheet_(book);
+  if(sheet.getLastRow()>1) throw new Error('มีบัญชีผู้ใช้งานแล้ว กรุณาให้ผู้ดูแลระบบเข้าสู่ระบบ');
+  if(!/^[A-Za-z0-9._-]{2,100}$/.test(username)||password.length<8||password.length>128) throw new Error('ชื่อผู้ใช้ต้องเป็นภาษาอังกฤษ/ตัวเลข และรหัสผ่านอย่างน้อย 8 ตัวอักษร');
+  var now=new Date(); sheet.getRange(2,1,1,USER_HEADERS.length).setValues([[username,passwordHash_(username,password,properties),'admin',true,now,'']]);
+  return json_({ok:true,message:'สร้างบัญชีผู้ดูแลแล้ว'});
+}
+function listUsers_(auth,book) {
+  requireAdmin_(auth);
+  var sheet=usersSheet_(book), last=sheet.getLastRow(), users=[];
+  if(last>1) sheet.getRange(2,1,last-1,USER_HEADERS.length).getValues().forEach(function(row){users.push({username:String(row[0]||''),role:String(row[2]||'receiver'),active:isActive_(row[3]),createdAt:dateValue_(row[4]),lastLogin:dateValue_(row[5])});});
+  return json_({ok:true,users:users});
+}
+function upsertUser_(auth,body,book,properties) {
+  requireAdmin_(auth);
+  var incoming=body.user||{}, username=String(incoming.username||'').trim(), password=String(incoming.password||''), role=String(incoming.role||'receiver')==='admin'?'admin':'receiver', active=incoming.active!==false;
+  if(!/^[A-Za-z0-9._-]{2,100}$/.test(username)) throw new Error('ชื่อผู้ใช้ต้องเป็นภาษาอังกฤษ/ตัวเลข 2-100 ตัวอักษร');
+  var sheet=usersSheet_(book), found=findUser_(sheet,username), now=new Date();
+  if(!found) {
+    if(password.length<8||password.length>128) throw new Error('รหัสผ่านต้องยาว 8-128 ตัวอักษร');
+    sheet.getRange(sheet.getLastRow()+1,1,1,USER_HEADERS.length).setValues([[username,passwordHash_(username,password,properties),role,active,now,'']]);
+  } else {
+    sheet.getRange(found.row,3).setValue(role); sheet.getRange(found.row,4).setValue(active);
+    if(password) {if(password.length<8||password.length>128) throw new Error('รหัสผ่านต้องยาว 8-128 ตัวอักษร');sheet.getRange(found.row,2).setValue(passwordHash_(found.values[0],password,properties));}
+  }
+  return json_({ok:true,message:found?'ปรับปรุงผู้ใช้แล้ว':'เพิ่มผู้ใช้แล้ว'});
+}
+function deleteUser_(auth,body,book) {
+  requireAdmin_(auth);
+  var username=String(body.username||'').trim();
+  if(username===String(auth.username||'')) throw new Error('ไม่สามารถลบบัญชีที่กำลังใช้งานอยู่');
+  var sheet=usersSheet_(book), found=findUser_(sheet,username);
+  if(!found) throw new Error('ไม่พบผู้ใช้');
+  sheet.deleteRow(found.row);
+  return json_({ok:true,message:'ลบผู้ใช้แล้ว'});
+}
+function logout_(body) {
+  try {if(typeof body.sessionToken==='string'&&body.sessionToken) CacheService.getScriptCache().remove('wh-session-'+body.sessionToken);} catch(error) {}
+  return json_({ok:true});
+}
+function requireAdmin_(auth) {if(!auth||auth.legacy||auth.role!=='admin') throw new Error('ต้องใช้สิทธิ์ผู้ดูแลระบบ');}
+function usersSheet_(book) {
+  var sheet=book.getSheetByName('Users');
+  if(!sheet) {sheet=book.insertSheet('Users');sheet.getRange(1,1,1,USER_HEADERS.length).setValues([USER_HEADERS]);sheet.setFrozenRows(1);}
+  if(sheet.getRange(1,1,1,USER_HEADERS.length).getValues()[0].join('|')!==USER_HEADERS.join('|')) throw new Error('หัวตาราง Users ไม่ตรงกับระบบ');
+  return sheet;
+}
+function findUser_(sheet,username) {
+  var last=sheet.getLastRow(); if(last<2) return null;
+  var wanted=String(username).toLowerCase(), values=sheet.getRange(2,1,last-1,USER_HEADERS.length).getValues();
+  for(var i=0;i<values.length;i++) if(String(values[i][0]||'').toLowerCase()===wanted) return {row:i+2,values:values[i]};
+  return null;
+}
+function passwordHash_(username,password,properties) {
+  var salt=properties.getProperty('PASSWORD_SALT');
+  if(!salt) {salt=Utilities.getUuid();properties.setProperty('PASSWORD_SALT',salt);}
+  var bytes=Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256,String(username).toLowerCase()+':'+salt+':'+password,Utilities.Charset.UTF_8);
+  return bytes.map(function(value){var n=value<0?value+256:value;return ('0'+n.toString(16)).slice(-2);}).join('');
+}
+function isActive_(value) {return value===true||String(value).toLowerCase()==='true'||String(value)==='1';}
+function dateValue_(value) {return value instanceof Date?value.toISOString():value?String(value):'';}
+
+function receiveBatch_(sheet,receipts,auth) {
   if(!Array.isArray(receipts)||receipts.length<1||receipts.length>20) throw new Error('จำนวนรายการต่อชุดต้องอยู่ระหว่าง 1 ถึง 20');
-  receipts=receipts.map(validate_);
+  receipts=receipts.map(function(r){if(auth.username) r.employee=auth.username;return validate_(r);});
   var lock=LockService.getScriptLock();
   if(!lock.tryLock(25000)) throw new Error('มีรายการรับเข้าพร้อมกัน กรุณาลองส่งอีกครั้ง');
   try {
