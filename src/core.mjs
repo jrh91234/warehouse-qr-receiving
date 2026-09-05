@@ -28,7 +28,7 @@ export function parseQR(raw) {
   if(!Object.keys(data).length) {
     const star = text.split('*').map(part => part.trim());
     if(star.length >= 3 && /^[^*]{2,80}$/.test(star[0]) && /^[A-Za-z0-9_-]{2,80}$/.test(star[1]) && /^\d+(?:\.\d+)?$/.test(star[2])) {
-      data.materialCode=star[0]; data.lotNumber=star[1]; data.quantity=star[2]; data.unit='EA';
+      data.materialCode=star[0]; data.lotNumber=star[1]; data.quantity=star[2]; data.unit=star[2].includes('.')?'kg':'EA';
     }
   }
   return {data, raw: text, recognized: Object.keys(data).length > 0};
