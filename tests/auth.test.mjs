@@ -53,3 +53,22 @@ test('first admin bootstrap, user login, and username-bound receipt',()=>{
   assert.equal(b.post({action:'listUsers',sessionToken:receiver.token}).ok,false);
   assert.equal(b.post({action:'listUsers',sessionToken:admin.token}).users.length,2);
 });
+
+test('receipt deletion is limited to its sender while admin can delete any receipt',()=>{
+  const b=backend();
+  assert.equal(b.post({action:'bootstrapAdmin',accessCode:'testing-code-123456',username:'admin',password:'AdminPass123'}).ok,true);
+  const admin=b.post({action:'login',username:'admin',password:'AdminPass123'});
+  assert.equal(b.post({action:'upsertUser',sessionToken:admin.token,user:{username:'WH-001',password:'Receiver123',role:'receiver',active:true}}).ok,true);
+  assert.equal(b.post({action:'upsertUser',sessionToken:admin.token,user:{username:'WH-002',password:'Receiver234',role:'receiver',active:true}}).ok,true);
+  const senderOne=b.post({action:'login',username:'WH-001',password:'Receiver123'});
+  const senderTwo=b.post({action:'login',username:'WH-002',password:'Receiver234'});
+  assert.equal(b.post({action:'receive',sessionToken:senderOne.token,receipt:{...sample}}).ok,true);
+  const other={...sample,id:'22222222-2222-4222-8222-222222222222',rawQR:'QR-auth-002',employee:'WH-002'};
+  assert.equal(b.post({action:'receive',sessionToken:senderTwo.token,receipt:other}).ok,true);
+  assert.equal(b.post({action:'deleteReceipt',sessionToken:senderOne.token,id:other.id}).ok,false);
+  assert.equal(b.rows.Receipts.length,3);
+  assert.equal(b.post({action:'deleteReceipt',sessionToken:senderOne.token,id:sample.id}).ok,true);
+  assert.equal(b.rows.Receipts.length,2);
+  assert.equal(b.post({action:'deleteReceipt',sessionToken:admin.token,id:other.id}).ok,true);
+  assert.equal(b.rows.Receipts.length,1);
+});

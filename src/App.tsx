@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import QrScanner from 'qr-scanner';
-import { Box, ScanLine, History, Settings, ArrowUpRight, ArrowRight, Camera, ImagePlus, Keyboard, Check, X, Wifi, WifiOff, RotateCw, PackageCheck, ChevronRight, CircleAlert, ScanQrCode, LoaderCircle, LockKeyhole, Users, UserPlus, ShieldCheck, LogOut } from 'lucide-react';
+import { Box, ScanLine, History, Settings, ArrowUpRight, ArrowRight, Camera, ImagePlus, Keyboard, Check, X, Wifi, WifiOff, RotateCw, PackageCheck, ChevronRight, CircleAlert, ScanQrCode, LoaderCircle, LockKeyhole, Users, UserPlus, ShieldCheck, LogOut, Trash2 } from 'lucide-react';
 import { LOCATION_CODES, WAREHOUSE_OPTIONS, parseQR, validateReceipt, validApiUrl } from './core.mjs';
 import { postThroughFrame } from './transport.mjs';
 
@@ -45,6 +45,7 @@ export default function App(){
   const [online,setOnline]=useState(navigator.onLine);
   const [notice,setNotice]=useState<{message:string;type:'success'|'error'|'info'}|null>(null);
   const [sending,setSending]=useState(false);
+  const [deletingId,setDeletingId]=useState('');
   const [testing,setTesting]=useState(false);
   const busy=useRef(false);
   const syncTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
@@ -138,6 +139,17 @@ export default function App(){
     catch{flash('พื้นที่จัดเก็บในเครื่องไม่พร้อม ยังไม่ได้บันทึก กรุณาตรวจเบราว์เซอร์','error');return;}
     if(navigator.onLine){flash('รับเข้าคิวแล้ว กำลังส่ง Google Sheets…','info');scheduleSync();if(quickMode)setScanning(true);}else flash('เก็บรายการไว้ในเครื่องแล้ว เมื่อมีอินเทอร์เน็ตให้กด “ส่งรายการรอ”','info');
   }
+  async function deleteRecord(record:Receipt){
+    if(!user||!(user.role==='admin'||record.employee===user.username)||deletingId)return;
+    if(!window.confirm(`ต้องการลบรายการ ${record.materialCode} ของ ${record.employee} ใช่หรือไม่?`))return;
+    setDeletingId(record.id);
+    try{
+      if(record.status!=='pending') await request(record.apiUrl,{action:'deleteReceipt',id:record.id});
+      saveRecords(recordRef.current.filter(item=>item.id!==record.id));
+      flash('ลบรายการรับเข้าแล้ว','success');
+    }catch(e){flash((e as Error).message,'error');}
+    finally{setDeletingId('');}
+  }
   const field=(key:keyof Fields,label:string,required=false,placeholder='',type='text')=><label className={key==='materialName'||key==='notes'?'wide':''}>{label}{required&&<span className="required"> *</span>}<input type={type} required={required} value={fields[key]} onChange={e=>setFields({...fields,[key]:e.target.value})} placeholder={placeholder} maxLength={500} {...(type==='number'?{min:0.001,step:'any',inputMode:'decimal' as const}:{})}/></label>;
   const warehouseField=<label>คลังปลายทาง <span className="required">*</span><input required list="warehouse-options" autoComplete="off" value={fields.warehouse} onChange={e=>setFields({...fields,warehouse:e.target.value})} placeholder="เลือก CK หรือพิมพ์ชื่อคลัง" maxLength={500}/><datalist id="warehouse-options">{WAREHOUSE_OPTIONS.map(item=><option key={`${item.code || 'powder'}-${item.chinese}`} value={item.code || item.chinese} label={`${item.chinese} · ${item.thai}`}/>)}</datalist><small>เลือกจากรายการ หรือพิมพ์รหัส/ชื่อคลังเองได้</small></label>;
   const locationField=<label>ตำแหน่งจัดเก็บ <span className="required">*</span><select required value={fields.location} onChange={e=>setFields({...fields,location:e.target.value})}><option value="">เลือกตำแหน่งจัดเก็บ</option>{LOCATION_CODES.map(code=><option key={code} value={code}>{code}</option>)}</select><small>พิมพ์ FR001–FR100 เพื่อค้นหาจากรายการ</small></label>;
@@ -175,5 +187,5 @@ export default function App(){
     <footer><span><Box size={14}/> WH Receive</span><span>ข้อมูลการรับเข้า · Google Sheets{config.sheetUrl&&/^https:\/\/docs\.google\.com\/spreadsheets\/d\//.test(config.sheetUrl)&&<a href={config.sheetUrl} target="_blank" rel="noreferrer">เปิดชีต <ArrowUpRight size={14}/></a>}</span></footer>
     </main></div><nav className="mobile-nav">{navigation}</nav>
   </div>;
-  function renderRows(items:Receipt[]){return <div className="records-list">{items.map(r=><div className="record-row" key={r.id}><span className="record-icon"><Box size={21}/></span><div className="record-main"><strong>{r.materialCode}</strong><span>Lot {r.lotNumber} · {r.location}</span>{r.error&&<small className="error-text">{r.error}</small>}</div><div className="record-quantity"><strong>{r.quantity} <small>{r.unit}</small></strong><span>{date(r.createdAt)}</span></div><span className={'record-status '+r.status}>{r.status==='synced'?<><Check size={14}/>บันทึกแล้ว</>:r.status==='duplicate'?'รายการซ้ำ':<><RotateCw size={13}/>รอส่ง</>}</span></div>)}</div>;}
+  function renderRows(items:Receipt[]){return <div className="records-list">{items.map(r=><div className="record-row" key={r.id}><span className="record-icon"><Box size={21}/></span><div className="record-main"><strong>{r.materialCode}</strong><span>Lot {r.lotNumber} · {r.location} · {r.employee}</span>{r.error&&<small className="error-text">{r.error}</small>}</div><div className="record-quantity"><strong>{r.quantity} <small>{r.unit}</small></strong><span>{date(r.createdAt)}</span></div><span className={'record-status '+r.status}>{r.status==='synced'?<><Check size={14}/>บันทึกแล้ว</>:r.status==='duplicate'?'รายการซ้ำ':<><RotateCw size={13}/>รอส่ง</>}</span>{user&&(user.role==='admin'||r.employee===user.username)&&<button type="button" className="record-delete" aria-label={`ลบรายการ ${r.materialCode}`} disabled={deletingId===r.id} onClick={()=>void deleteRecord(r)}>{deletingId===r.id?<LoaderCircle className="spin" size={15}/>:<Trash2 size={15}/>}ลบ</button>}</div>)}</div>;}
 }

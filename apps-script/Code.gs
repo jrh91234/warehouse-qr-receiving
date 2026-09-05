@@ -4,7 +4,7 @@ var USER_HEADERS = ['Username','Password hash','Role','Active','Created at','Las
 var SESSION_TTL_SECONDS = 21600;
 
 function doGet(e) {
-  var status={ok:true,service:'WH Receive',version:'1.3.1',transport:'iframe'};
+  var status={ok:true,service:'WH Receive',version:'1.4.0',transport:'iframe'};
   if(e&&e.parameter&&e.parameter.transport==='iframe') return iframe_(status,String(e.parameter.requestId||''),e.parameter.origin);
   return json_(status);
 }
@@ -42,8 +42,9 @@ function doPost(e) {
       var sheet=book.getSheetByName('Receipts');
       if(!sheet) throw new Error('ไม่พบแท็บ Receipts กรุณาให้ผู้ดูแลตรวจสอบ');
       if(sheet.getRange(1,1,1,RECEIPT_HEADERS.length).getValues()[0].join('|')!==RECEIPT_HEADERS.join('|')) throw new Error('หัวตาราง Receipts ไม่ตรงกับระบบ กรุณาให้ผู้ดูแลตรวจสอบ');
-      if(action==='ping') response={ok:true,version:'1.3.1',user:auth.username||null};
+      if(action==='ping') response={ok:true,version:'1.4.0',user:auth.username||null};
       else if(action==='receiveBatch') response=receiveBatch_(sheet,body.receipts,auth);
+      else if(action==='deleteReceipt') response=deleteReceipt_(sheet,body.id,auth);
       else {
         if(action!=='receive') throw new Error('คำสั่งไม่ถูกต้อง');
         var receipt=bindEmployee_(body.receipt||{},auth);
@@ -236,5 +237,24 @@ function iframe_(body,requestId,origin) {
   var script='var message='+message+',target='+JSON.stringify(origin)+';var recipient=window;while(recipient!==recipient.parent){recipient=recipient.parent;recipient.postMessage(message,target);}';
   var output=HtmlService.createHtmlOutput('<!doctype html><html><body><script>'+script+'<\/script></body></html>');
   return HtmlService.XFrameOptionsMode&&output.setXFrameOptionsMode ? output.setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL) : output;
+}
+
+function deleteReceipt_(sheet,id,auth) {
+  if(!auth||auth.legacy||!auth.username) throw new Error('ต้องเข้าสู่ระบบก่อนลบรายการ');
+  id=String(id||'').trim();
+  if(!/^[0-9a-f-]{36}$/i.test(id)) throw new Error('รหัสรายการไม่ถูกต้อง');
+  var lock=LockService.getScriptLock();
+  if(!lock.tryLock(25000)) throw new Error('มีรายการกำลังแก้ไข กรุณาลองอีกครั้ง');
+  try {
+    var last=sheet.getLastRow();
+    if(last<2) throw new Error('ไม่พบรายการรับเข้า');
+    var found=sheet.getRange(2,1,last-1,1).createTextFinder(id).matchEntireCell(true).useRegularExpression(false).findNext();
+    if(!found) throw new Error('ไม่พบรายการรับเข้า หรือรายการถูกลบไปแล้ว');
+    var row=found.getRow(), employee=String(sheet.getRange(row,4).getValue()||'').trim();
+    if(auth.role!=='admin'&&employee.toLowerCase()!==String(auth.username).trim().toLowerCase()) throw new Error('ลบได้เฉพาะรายการของตนเอง');
+    sheet.deleteRow(row);
+    SpreadsheetApp.flush();
+    return {ok:true,id:id,message:'ลบรายการรับเข้าแล้ว'};
+  } finally { lock.releaseLock(); }
 }
 function json_(body){return ContentService.createTextOutput(JSON.stringify(body)).setMimeType(ContentService.MimeType.JSON);}
