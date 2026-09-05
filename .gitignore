@@ -8,3 +8,4 @@ outputs/
 tmp/
 artifacts/
 *.tsbuildinfo
+tmp/backend-deploy/access-code.txt
