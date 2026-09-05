@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import QrScanner from 'qr-scanner';
 import { Box, ScanLine, History, Settings, ArrowUpRight, ArrowRight, Camera, ImagePlus, Keyboard, Check, X, Wifi, WifiOff, RotateCw, PackageCheck, ChevronRight, CircleAlert, ScanQrCode, LoaderCircle, LockKeyhole, Users, UserPlus, ShieldCheck, LogOut } from 'lucide-react';
 import { LOCATION_CODES, parseQR, validateReceipt, validApiUrl } from './core.mjs';
+import { postThroughFrame } from './transport.mjs';
 
 type Fields = {materialCode:string;materialName:string;specification:string;lotNumber:string;warehouse:string;location:string;quantity:string;unit:string;notes:string};
 type Receipt = Fields & {id:string;rawQR:string;employee:string;createdAt:string;status:'pending'|'synced'|'duplicate';error?:string;serverTime?:string;apiUrl:string};
@@ -69,31 +70,6 @@ export default function App(){
     try{const parsed=parseQR(raw);const previous=recordRef.current.find(r=>r.rawQR===parsed.raw);if(previous){flash(previous.status==='pending'?'QR นี้อยู่ในรายการรอส่งแล้ว':'เคยรับ QR นี้แล้ว กรุณาตรวจประวัติ','error');return;}
     setRawQR(parsed.raw);setRecognized(parsed.recognized);setFields({...empty,...read(KEY+'-destination',{}),...parsed.data});setManual(false);setManualText('');setView('scan');setNotice(null);navigator.vibrate?.(100);
     }catch(e){flash((e as Error).message,'error');}
-  }
-  function postThroughFrame(apiUrl:string,payload:object){
-    return new Promise<any>((resolve,reject)=>{
-      const requestId=crypto.randomUUID();
-      const frame=document.createElement('iframe');
-      const formElement=document.createElement('form');
-      let settled=false,graceTimer:number|null=null;
-      const timeout=window.setTimeout(()=>finish(new Error('การเชื่อมต่อใช้เวลานานเกินไป กรุณาลองอีกครั้ง')),30000);
-      frame.name='wh-receive-'+requestId;frame.hidden=true;frame.title='WH Receive response';frame.src='about:blank';
-      formElement.method='post';formElement.action=apiUrl;formElement.target=frame.name;formElement.hidden=true;
-      const add=(name:string,value:string)=>{const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;formElement.append(input);};
-      add('transport','iframe');add('requestId',requestId);add('origin',window.location.origin);add('payload',JSON.stringify(payload));
-      const onMessage=(event:MessageEvent)=>{
-        if(event.source!==frame.contentWindow||!event.data||event.data.type!=='wh-receive-response'||event.data.requestId!==requestId)return;
-        finish(null,event.data.result);
-      };
-      // Google rejects the request (e.g. deployment access isn't "Anyone", or the URL points to a stale/deleted
-      // deployment) before our code ever runs. That still loads a page into the frame, just not ours, so give up
-      // fast instead of waiting out the full timeout once a response has clearly arrived without a postMessage.
-      const onResponseLoad=()=>{if(graceTimer===null)graceTimer=window.setTimeout(()=>finish(new Error('เชื่อมต่อ Google Apps Script ไม่สำเร็จ กรุณาตรวจสอบว่า Deploy เว็บแอปแบบ "Anyone" และ URL ที่ตั้งค่าเป็นเวอร์ชันล่าสุด')),1500);};
-      function finish(error:Error|null,result?:any){if(settled)return;settled=true;window.clearTimeout(timeout);if(graceTimer!==null)window.clearTimeout(graceTimer);window.removeEventListener('message',onMessage);formElement.remove();frame.remove();if(error)reject(error);else resolve(result);}
-      window.addEventListener('message',onMessage);
-      frame.addEventListener('load',function onBlankLoad(){frame.removeEventListener('load',onBlankLoad);frame.addEventListener('load',onResponseLoad);document.body.append(formElement);formElement.submit();});
-      document.body.append(frame);
-    });
   }
   async function request(apiUrl:string,body:object,includeCredentials=true){
     if(!validApiUrl(apiUrl))throw new Error('ยังไม่ได้เชื่อมต่อระบบ กรุณาตั้งค่า Web App URL');

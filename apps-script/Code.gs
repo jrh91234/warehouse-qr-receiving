@@ -3,8 +3,10 @@ var RECEIPT_HEADERS = ['Request ID','Received at','Scanned at','Employee','Raw Q
 var USER_HEADERS = ['Username','Password hash','Role','Active','Created at','Last login'];
 var SESSION_TTL_SECONDS = 21600;
 
-function doGet() {
-  return json_({ok:true,service:'WH Receive',version:'1.3.0'});
+function doGet(e) {
+  var status={ok:true,service:'WH Receive',version:'1.3.1',transport:'iframe'};
+  if(e&&e.parameter&&e.parameter.transport==='iframe') return iframe_(status,String(e.parameter.requestId||''),e.parameter.origin);
+  return json_(status);
 }
 
 // Run once from the Apps Script editor to set the spreadsheet and shared bootstrap code.
@@ -21,6 +23,7 @@ function doPost(e) {
   var requestId=iframeRequest?String(e.parameter.requestId||''):'';
   var response;
   try {
+    if(iframeRequest&&!allowedOrigin_(e.parameter.origin)) throw new Error('ไม่อนุญาตให้เรียกใช้จากเว็บไซต์นี้');
     var raw=iframeRequest?e.parameter.payload:(e&&e.postData&&e.postData.contents);
     if(typeof raw!=='string'||!raw||raw.length>160000) throw new Error('คำขอไม่ถูกต้อง');
     var body=JSON.parse(raw), action=String(body.action||'');
@@ -39,7 +42,7 @@ function doPost(e) {
       var sheet=book.getSheetByName('Receipts');
       if(!sheet) throw new Error('ไม่พบแท็บ Receipts กรุณาให้ผู้ดูแลตรวจสอบ');
       if(sheet.getRange(1,1,1,RECEIPT_HEADERS.length).getValues()[0].join('|')!==RECEIPT_HEADERS.join('|')) throw new Error('หัวตาราง Receipts ไม่ตรงกับระบบ กรุณาให้ผู้ดูแลตรวจสอบ');
-      if(action==='ping') response={ok:true,version:'1.3.0',user:auth.username||null};
+      if(action==='ping') response={ok:true,version:'1.3.1',user:auth.username||null};
       else if(action==='receiveBatch') response=receiveBatch_(sheet,body.receipts,auth);
       else {
         if(action!=='receive') throw new Error('คำสั่งไม่ถูกต้อง');
@@ -222,11 +225,16 @@ function validate_(r) {
 }
 function safeCell_(value){return typeof value==='string'&&/^[=+@\-\t\r\n]/.test(value)?"'"+value:value;}
 function equal_(a,b){var mismatch=a.length^b.length;for(var i=0;i<Math.max(a.length,b.length);i++)mismatch|=(a.charCodeAt(i)||0)^(b.charCodeAt(i)||0);return mismatch===0;}
+function allowedOrigin_(origin) {
+  return typeof origin==='string'&&(/^https:\/\/jrh91234\.github\.io$/.test(origin)||/^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/.test(origin));
+}
 function iframe_(body,requestId,origin) {
-  var target=/^https:\/\/jrh91234\.github\.io$/.test(origin)||/^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?$/.test(origin)?origin:'https://jrh91234.github.io';
+  if(!allowedOrigin_(origin)) return HtmlService.createHtmlOutput('');
   var message=JSON.stringify({type:'wh-receive-response',requestId:requestId,result:body}).replace(/</g,'\\u003c').replace(/>/g,'\\u003e').replace(/&/g,'\\u0026').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');
-  // ALLOWALL is required: the page is framed by the app on another origin (GitHub Pages), and the default
-  // mode sends X-Frame-Options: SAMEORIGIN, which makes Google refuse the framed response with a 403.
-  return HtmlService.createHtmlOutput('<!doctype html><html><body><script>window.parent.postMessage('+message+','+JSON.stringify(target)+');<\/script></body></html>').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  // Google wraps this HTML in a sandbox iframe. Send to ancestors using an exact
+  // target origin so only our app receives it, including when the app is embedded.
+  var script='var message='+message+',target='+JSON.stringify(origin)+';var recipient=window;while(recipient!==recipient.parent){recipient=recipient.parent;recipient.postMessage(message,target);}';
+  var output=HtmlService.createHtmlOutput('<!doctype html><html><body><script>'+script+'<\/script></body></html>');
+  return HtmlService.XFrameOptionsMode&&output.setXFrameOptionsMode ? output.setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL) : output;
 }
 function json_(body){return ContentService.createTextOutput(JSON.stringify(body)).setMimeType(ContentService.MimeType.JSON);}
