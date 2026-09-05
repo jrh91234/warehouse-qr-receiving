@@ -7,7 +7,7 @@ function doGet() {
 
 function doPost(e) {
   try {
-    if(!e || !e.postData || e.postData.contents.length > 20000) throw new Error('คำขอไม่ถูกต้อง');
+    if(!e || !e.postData || e.postData.contents.length > 160000) throw new Error('คำขอไม่ถูกต้อง');
     var body=JSON.parse(e.postData.contents);
     var properties=PropertiesService.getScriptProperties();
     var secret=properties.getProperty('ACCESS_CODE');
@@ -20,6 +20,7 @@ function doPost(e) {
     if(!sheet) throw new Error('ไม่พบแท็บ Receipts กรุณาให้ผู้ดูแลตรวจสอบ');
     if(sheet.getRange(1,1,1,RECEIPT_HEADERS.length).getValues()[0].join('|')!==RECEIPT_HEADERS.join('|')) throw new Error('หัวตาราง Receipts ไม่ตรงกับระบบ กรุณาให้ผู้ดูแลตรวจสอบ');
     if(body.action==='ping') return json_({ok:true,version:'1.0.0'});
+    if(body.action==='receiveBatch') return receiveBatch_(sheet,body.receipts);
     if(body.action!=='receive') throw new Error('คำสั่งไม่ถูกต้อง');
     var receipt=validate_(body.receipt);
     var lock=LockService.getScriptLock();
@@ -46,6 +47,36 @@ function doPost(e) {
       return json_({ok:true,id:receipt.id,serverTime:now.toISOString()});
     } finally {lock.releaseLock();}
   } catch(error) {return json_({ok:false,message:error.message||'เกิดข้อผิดพลาดในการบันทึก'});}
+}
+
+function receiveBatch_(sheet,receipts) {
+  if(!Array.isArray(receipts)||receipts.length<1||receipts.length>20) throw new Error('จำนวนรายการต่อชุดต้องอยู่ระหว่าง 1 ถึง 20');
+  receipts=receipts.map(validate_);
+  var lock=LockService.getScriptLock();
+  if(!lock.tryLock(25000)) throw new Error('มีรายการรับเข้าพร้อมกัน กรุณาลองส่งอีกครั้ง');
+  try {
+    var last=sheet.getLastRow(), ids={}, qrs={}, results=[], rows=[];
+    if(last>1) {
+      var existing=sheet.getRange(2,1,last-1,5).getValues();
+      existing.forEach(function(row){if(row[0])ids[String(row[0])]=row[1];if(row[4])qrs[String(row[4])]=true;});
+    }
+    receipts.forEach(function(r){
+      if(ids[r.id]) { results.push({id:r.id,replayed:true,serverTime:new Date(ids[r.id]).toISOString()}); return; }
+      if(qrs[r.rawQR]) { results.push({id:r.id,duplicate:true,serverTime:new Date().toISOString()}); return; }
+      var now=new Date();
+      rows.push([r.id,now,new Date(r.createdAt),r.employee,r.rawQR,r.materialCode,r.materialName,r.specification,r.lotNumber,r.warehouse,r.location,Number(r.quantity),r.unit,r.notes].map(safeCell_));
+      ids[r.id]=now; qrs[r.rawQR]=true; results.push({id:r.id,serverTime:now.toISOString()});
+    });
+    if(rows.length) {
+      var next=last+1;
+      if(next+rows.length-1>sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(),Math.max(1000,rows.length));
+      sheet.getRange(next,1,rows.length,RECEIPT_HEADERS.length).setValues(rows);
+      sheet.getRange(next,2,rows.length,2).setNumberFormat('yyyy-mm-dd hh:mm:ss');
+      sheet.getRange(next,12,rows.length,1).setNumberFormat('#,##0.###');
+      SpreadsheetApp.flush();
+    }
+    return json_({ok:true,results:results});
+  } finally { lock.releaseLock(); }
 }
 
 function validate_(r) {

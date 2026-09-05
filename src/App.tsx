@@ -26,6 +26,7 @@ export default function App(){
   const [manual,setManual]=useState(false);
   const [manualText,setManualText]=useState('');
   const [scanning,setScanning]=useState(false);
+  const [quickMode,setQuickMode]=useState(()=>read(KEY+'-quick',true));
   const [cameraReady,setCameraReady]=useState(false);
   const [online,setOnline]=useState(navigator.onLine);
   const [notice,setNotice]=useState<{message:string;type:'success'|'error'|'info'}|null>(null);
@@ -46,6 +47,7 @@ export default function App(){
   useEffect(()=>{const update=(event:StorageEvent)=>{if(event.key===KEY+'-records'){const next=read<Receipt[]>(KEY+'-records',[]);recordRef.current=next;setRecords(next);}};window.addEventListener('storage',update);return()=>window.removeEventListener('storage',update);},[]);
   useEffect(()=>{if(!scanning||!video.current)return;let cancelled=false;const instance=new QrScanner(video.current,result=>{if(!cancelled){setScanning(false);acceptQR(result.data);}},{preferredCamera:'environment',highlightScanRegion:true,highlightCodeOutline:true,maxScansPerSecond:5});scanner.current=instance;instance.start().then(()=>{if(!cancelled)setCameraReady(true);}).catch((error:Error)=>{if(cancelled)return;setScanning(false);flash(error.name==='NotAllowedError'?'กรุณาอนุญาตการใช้กล้องในเบราว์เซอร์ แล้วลองอีกครั้ง':'เปิดกล้องไม่ได้ ลองใช้ Chrome/Safari ผ่าน HTTPS หรือเลือกรูป QR','error');});return()=>{cancelled=true;instance.destroy();scanner.current=null;setCameraReady(false);};},[scanning]);
   useEffect(()=>{if(view!=='scan')setScanning(false);},[view]);
+  useEffect(()=>{if(online&&pending.length&&!busy.current)void syncAll();},[online]);
   function acceptQR(raw:string){
     try{const parsed=parseQR(raw);const previous=recordRef.current.find(r=>r.rawQR===parsed.raw);if(previous){flash(previous.status==='pending'?'QR นี้อยู่ในรายการรอส่งแล้ว':'เคยรับ QR นี้แล้ว กรุณาตรวจประวัติ','error');return;}
     setRawQR(parsed.raw);setRecognized(parsed.recognized);setFields({...empty,...read(KEY+'-destination',{}),...parsed.data});setManual(false);setManualText('');setView('scan');setNotice(null);navigator.vibrate?.(100);
@@ -59,29 +61,30 @@ export default function App(){
     const result=await response.json();if(!result.ok)throw new Error(result.message||'บันทึกไม่สำเร็จ');return result;
   }
   async function syncAll(){
-    if(busy.current)return;busy.current=true;setSending(true);
+    if(busy.current||!online)return;busy.current=true;setSending(true);
+    const waiting=[...recordRef.current.filter(r=>r.status==='pending')].slice(0,20);
+    if(!waiting.length){busy.current=false;setSending(false);return;}
+    let canContinue=false;
     try{
-      const waiting=[...recordRef.current.filter(r=>r.status==='pending')];let success=0;
-      for(const receipt of waiting){
-        try{const result=await request(receipt.apiUrl,{action:'receive',receipt});
-          if(result.id!==receipt.id)throw new Error('คำตอบจากระบบไม่ตรงกับรายการ กรุณาส่งซ้ำ');
-          saveRecords(recordRef.current.map(r=>r.id===receipt.id?{...r,status:result.duplicate?'duplicate':'synced',serverTime:result.serverTime,error:result.duplicate?'QR นี้มีรายการรับเข้าใน Google Sheets แล้ว':undefined}:r));if(!result.duplicate)success++;
-        }catch(e){saveRecords(recordRef.current.map(r=>r.id===receipt.id?{...r,error:(e as Error).message}:r));throw e;}
-      }
-      if(success)flash(`บันทึกใน Google Sheets แล้ว ${success} รายการ`,'success');
-      else if(waiting.length)flash('ตรวจรายการซ้ำแล้ว ดูรายละเอียดในประวัติ','info');
-    }catch(e){flash(`${(e as Error).message} · รายการยังอยู่ในเครื่อง กดส่งอีกครั้งได้`,'error');}
-    finally{busy.current=false;setSending(false);}
+      const result=await request(waiting[0].apiUrl,{action:'receiveBatch',receipts:waiting});
+      if(!Array.isArray(result.results)||result.results.length!==waiting.length)throw new Error('คำตอบจากระบบไม่ครบถ้วน รายการยังอยู่ในคิว');
+      const byId=new Map<string,{id:string;duplicate?:boolean;replayed?:boolean;serverTime?:string}>(result.results.map((item:{id:string;duplicate?:boolean;replayed?:boolean;serverTime?:string})=>[item.id,item] as [string,{id:string;duplicate?:boolean;replayed?:boolean;serverTime?:string}]));
+      saveRecords(recordRef.current.map(r=>{const item=byId.get(r.id);if(!item)return r;return {...r,status:item.duplicate?'duplicate':'synced',serverTime:item.serverTime,error:item.duplicate?'QR นี้มีรายการรับเข้าใน Google Sheets แล้ว':undefined};}));
+      const success=result.results.filter((item:{duplicate?:boolean})=>!item.duplicate).length;
+      flash(`ส่ง Google Sheets แล้ว ${success} รายการ`,'success');
+      canContinue=true;
+    }catch(e){saveRecords(recordRef.current.map(r=>waiting.some(item=>item.id===r.id)?{...r,error:(e as Error).message}:r));flash(`${(e as Error).message} · รายการยังอยู่ในเครื่อง กดส่งอีกครั้งได้`,'error');}
+    finally{busy.current=false;setSending(false);if(canContinue&&online&&recordRef.current.some(r=>r.status==='pending'))setTimeout(()=>void syncAll(),0);}
   }
   async function submit(event:React.FormEvent){
-    event.preventDefault();if(busy.current)return;
+    event.preventDefault();
     const receipt:Receipt={...fields,id:crypto.randomUUID(),rawQR,employee:employee.trim(),createdAt:new Date().toISOString(),status:'pending',apiUrl:config.apiUrl};
     const issue=validateReceipt(receipt);if(issue){flash(issue,'error');return;}
     if(!validApiUrl(config.apiUrl)||!accessCode.trim()){flash('กรุณาตั้งค่าการเชื่อมต่อและรหัสเข้าใช้งานก่อนรับพาร์ท','error');setView('settings');return;}
     if(recordRef.current.some(r=>r.rawQR===rawQR)){flash('QR นี้อยู่ในประวัติแล้ว','error');return;}
     try{put(KEY+'-employee',employee.trim());put(KEY+'-destination',{warehouse:fields.warehouse,location:fields.location});saveRecords([receipt,...recordRef.current]);setRawQR('');setFields({...empty,warehouse:fields.warehouse,location:fields.location});}
     catch{flash('พื้นที่จัดเก็บในเครื่องไม่พร้อม ยังไม่ได้บันทึก กรุณาตรวจเบราว์เซอร์','error');return;}
-    if(navigator.onLine)await syncAll();else flash('เก็บรายการไว้ในเครื่องแล้ว เมื่อมีอินเทอร์เน็ตให้กด “ส่งรายการรอ”','info');
+    if(navigator.onLine){flash('รับเข้าคิวแล้ว กำลังส่ง Google Sheets…','info');void syncAll();if(quickMode)setScanning(true);}else flash('เก็บรายการไว้ในเครื่องแล้ว เมื่อมีอินเทอร์เน็ตให้กด “ส่งรายการรอ”','info');
   }
   const field=(key:keyof Fields,label:string,required=false,placeholder='',type='text')=><label className={key==='materialName'||key==='notes'?'wide':''}>{label}{required&&<span className="required"> *</span>}<input type={type} required={required} value={fields[key]} onChange={e=>setFields({...fields,[key]:e.target.value})} placeholder={placeholder} maxLength={500} {...(type==='number'?{min:0.001,step:'any',inputMode:'decimal' as const}:{})}/></label>;
   const navigation=(<><button className={view==='scan'?'active':''} onClick={()=>setView('scan')}><ScanLine size={20}/><span>รับพาร์ท</span><ChevronRight className="nav-arrow" size={16}/></button><button className={view==='history'?'active':''} onClick={()=>setView('history')}><History size={20}/><span>ประวัติการรับ</span>{pending.length>0&&<b className="count">{pending.length}</b>}</button><button className={view==='settings'?'active':''} onClick={()=>{setConfigDraft(config);setView('settings');}}><Settings size={20}/><span>ตั้งค่า</span></button></>);
@@ -96,7 +99,7 @@ export default function App(){
       <div className="receiving-grid"><section className="panel scan-panel"><div className="panel-heading"><h2><span className="step-number">01</span>สแกน QR code</h2><span className="micro-label">PART LABEL</span></div>
         <div className={'viewfinder '+(scanning?'is-scanning':'')}>
           {scanning?<><video ref={video} muted playsInline/><div className="live-tag"><i/>{cameraReady?'กล้องพร้อมสแกน':'กำลังเปิดกล้อง…'}</div><button className="stop-camera" onClick={()=>setScanning(false)}>ปิดกล้อง <X size={16}/></button></>:<><div className="scan-corners"><ScanQrCode size={66} strokeWidth={1.25}/></div><h3>{rawQR?'อ่าน QR code แล้ว':'พร้อมรับพาร์ทชิ้นถัดไป'}</h3><p>{rawQR?'ตรวจสอบข้อมูลทางด้านขวาก่อนยืนยัน':'วาง QR code บนป้ายให้อยู่ในกรอบ'}</p><button className="lime-button" onClick={()=>{setNotice(null);setScanning(true);}}><Camera size={19}/>{rawQR?'สแกนใหม่':'เปิดกล้องสแกน'}<ArrowRight size={18}/></button><span className="camera-note">ใช้กล้องหลังของโทรศัพท์</span></>}
-        </div><div className="scan-options"><button onClick={()=>file.current?.click()}><ImagePlus size={18}/>เลือกรูป QR</button><span/><button onClick={()=>setManual(!manual)}><Keyboard size={18}/>กรอกรหัสเอง</button></div>
+        </div><div className="scan-options"><button onClick={()=>file.current?.click()}><ImagePlus size={18}/>เลือกรูป QR</button><span/><button onClick={()=>setManual(!manual)}><Keyboard size={18}/>กรอกรหัสเอง</button></div><label className="quick-toggle"><input type="checkbox" checked={quickMode} onChange={e=>{setQuickMode(e.target.checked);put(KEY+'-quick',e.target.checked);}}/><span className="toggle-track"/><span>โหมดสแกนต่อเนื่อง</span><small>บันทึกเข้าคิวและเปิดกล้องต่อทันที</small></label>
         <input ref={file} hidden type="file" accept="image/*" onChange={async e=>{const uploaded=e.target.files?.[0];if(!uploaded)return;setScanning(false);try{const result=await QrScanner.scanImage(uploaded,{returnDetailedScanResult:true});acceptQR(result.data);}catch{flash('อ่าน QR ในภาพไม่ได้ กรุณาเลือกภาพที่เห็น QR เต็มรูป หรือกรอกรหัสเอง','error');}e.target.value='';}}/>
         {manual&&<form className="manual-form" onSubmit={e=>{e.preventDefault();acceptQR(manualText);}}><label>ข้อความจาก QR / รหัสบนป้าย<textarea required value={manualText} onChange={e=>setManualText(e.target.value)} maxLength={4096} placeholder="สแกนด้วยเครื่องอ่าน หรือพิมพ์รหัสบนป้าย"/></label><button className="secondary-button">ใช้รหัสนี้ <ArrowRight size={16}/></button></form>}
         <div className="scan-tip"><ScanLine size={21}/><p>ให้เห็น QR เต็มกรอบและหลีกเลี่ยงแสงสะท้อน<br/><span>ตรวจจำนวนจริงทุกครั้งก่อนยืนยันรับเข้า</span></p></div>
@@ -104,7 +107,7 @@ export default function App(){
         {!rawQR?<div className="empty-detail"><div><Box size={39} strokeWidth={1.3}/></div><h3>ข้อมูลพาร์ทจะแสดงที่นี่</h3><p>เปิดกล้องสแกน QR บนป้ายพาร์ท<br/>หรือเลือกกรอกรหัสเองเพื่อเริ่มรับเข้า</p><span><ScanLine size={15}/> สแกน <ArrowRight size={14}/> ตรวจสอบ <ArrowRight size={14}/> รับเข้า</span></div>:<form ref={form} className="receipt-form" onSubmit={submit}>
           <div className="raw-code"><span>QR ต้นฉบับ</span><code>{rawQR}</code></div>{!recognized&&<p className="form-note">QR นี้ยังไม่มีรูปแบบแยกข้อมูลที่รู้จัก กรุณากรอกข้อมูลตามป้ายด้านล่าง</p>}
           <div className="form-grid">{field('materialCode','Material code',true)}{field('lotNumber','Lot number',true)}{field('materialName','Material name')}{field('specification','Specification')}{field('warehouse','คลังปลายทาง',true)}{field('location','ตำแหน่งจัดเก็บ',true)}{field('quantity','จำนวนรับจริง',true,'0','number')}{field('unit','หน่วย',true)}<label>ชื่อ / รหัสผู้รับ <span className="required">*</span><input required value={employee} onChange={e=>setEmployee(e.target.value)} placeholder="ระบุผู้รับพาร์ท" maxLength={100}/></label>{field('notes','หมายเหตุ')}</div>
-          <div className="form-actions"><button type="button" className="text-button muted" onClick={()=>setRawQR('')}>ยกเลิก</button><button className="primary-button" disabled={sending}>{sending?<LoaderCircle className="spin" size={19}/>:<PackageCheck size={19}/>}ยืนยันรับเข้าคลัง<ArrowRight size={18}/></button></div>
+          <div className="form-actions"><button type="button" className="text-button muted" onClick={()=>setRawQR('')}>ยกเลิก</button><button className="primary-button">{sending?<LoaderCircle className="spin" size={19}/>:<PackageCheck size={19}/>}ยืนยันรับเข้าคลัง<ArrowRight size={18}/></button></div>
         </form>}
       </section></div>
       <section className="panel recent-panel"><div className="panel-heading"><h2>รายการล่าสุด</h2><button className="text-button" onClick={()=>setView('history')}>ดูประวัติทั้งหมด <ArrowRight size={16}/></button></div>{records.length?renderRows(records.slice(0,3)):<div className="empty-history"><History size={23}/><span>ยังไม่มีรายการรับพาร์ทจากอุปกรณ์นี้</span><small>รายการจะแสดงหลังจากยืนยันรับเข้า</small></div>}</section>
