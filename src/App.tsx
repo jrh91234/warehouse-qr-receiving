@@ -1,0 +1,120 @@
+import { useState, useEffect, useRef } from 'react';
+import QrScanner from 'qr-scanner';
+import { Box, ScanLine, History, Settings, ArrowUpRight, ArrowRight, Camera, ImagePlus, Keyboard, Check, X, Wifi, WifiOff, RotateCw, PackageCheck, ChevronRight, CircleAlert, ScanQrCode, LoaderCircle, LockKeyhole } from 'lucide-react';
+import { parseQR, validateReceipt, validApiUrl } from './core.mjs';
+
+type Fields = {materialCode:string;materialName:string;specification:string;lotNumber:string;warehouse:string;location:string;quantity:string;unit:string;notes:string};
+type Receipt = Fields & {id:string;rawQR:string;employee:string;createdAt:string;status:'pending'|'synced'|'duplicate';error?:string;serverTime?:string;apiUrl:string};
+type Config = {apiUrl:string;sheetUrl:string};
+const empty: Fields = {materialCode:'',materialName:'',specification:'',lotNumber:'',warehouse:'',location:'',quantity:'',unit:'EA',notes:''};
+const KEY='wh-receive-v1';
+function read<T,>(key:string,fallback:T):T {try{return JSON.parse(localStorage.getItem(key)||'null')??fallback;}catch{return fallback;}}
+function put(key:string,value:unknown){localStorage.setItem(key,JSON.stringify(value));}
+function date(value:string){return new Date(value).toLocaleString('th-TH',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});}
+
+export default function App(){
+  const [view,setView]=useState<'scan'|'history'|'settings'>('scan');
+  const [config,setConfig]=useState<Config>(read(KEY+'-config',{apiUrl:'',sheetUrl:''}));
+  const [configDraft,setConfigDraft]=useState(config);
+  const [employee,setEmployee]=useState(read(KEY+'-employee',''));
+  const [accessCode,setAccessCode]=useState(()=>sessionStorage.getItem(KEY+'-access')||'');
+  const [records,setRecords]=useState<Receipt[]>(read(KEY+'-records',[]));
+  const recordRef=useRef(records);
+  const [fields,setFields]=useState<Fields>({...empty,...read(KEY+'-destination',{})});
+  const [rawQR,setRawQR]=useState('');
+  const [recognized,setRecognized]=useState(false);
+  const [manual,setManual]=useState(false);
+  const [manualText,setManualText]=useState('');
+  const [scanning,setScanning]=useState(false);
+  const [cameraReady,setCameraReady]=useState(false);
+  const [online,setOnline]=useState(navigator.onLine);
+  const [notice,setNotice]=useState<{message:string;type:'success'|'error'|'info'}|null>(null);
+  const [sending,setSending]=useState(false);
+  const [testing,setTesting]=useState(false);
+  const busy=useRef(false);
+  const video=useRef<HTMLVideoElement>(null);
+  const scanner=useRef<QrScanner|null>(null);
+  const file=useRef<HTMLInputElement>(null);
+  const form=useRef<HTMLFormElement>(null);
+  const today=new Date().toLocaleDateString('en-CA');
+  const pending=records.filter(r=>r.status==='pending');
+  const completed=records.filter(r=>r.status==='synced'&&new Date(r.createdAt).toLocaleDateString('en-CA')===today);
+  const flash=(message:string,type:'success'|'error'|'info'='info')=>setNotice({message,type});
+  function saveRecords(next:Receipt[]){put(KEY+'-records',next);recordRef.current=next;setRecords(next);}
+  useEffect(()=>{fetch('./config.json').then(r=>r.json()).then((data:Config)=>{if(data.apiUrl&&!read<Config>(KEY+'-config',{apiUrl:'',sheetUrl:''}).apiUrl){setConfig(data);setConfigDraft(data);}}).catch(()=>{});},[]);
+  useEffect(()=>{const update=()=>setOnline(navigator.onLine);window.addEventListener('online',update);window.addEventListener('offline',update);return()=>{window.removeEventListener('online',update);window.removeEventListener('offline',update);};},[]);
+  useEffect(()=>{const update=(event:StorageEvent)=>{if(event.key===KEY+'-records'){const next=read<Receipt[]>(KEY+'-records',[]);recordRef.current=next;setRecords(next);}};window.addEventListener('storage',update);return()=>window.removeEventListener('storage',update);},[]);
+  useEffect(()=>{if(!scanning||!video.current)return;let cancelled=false;const instance=new QrScanner(video.current,result=>{if(!cancelled){setScanning(false);acceptQR(result.data);}},{preferredCamera:'environment',highlightScanRegion:true,highlightCodeOutline:true,maxScansPerSecond:5});scanner.current=instance;instance.start().then(()=>{if(!cancelled)setCameraReady(true);}).catch((error:Error)=>{if(cancelled)return;setScanning(false);flash(error.name==='NotAllowedError'?'กรุณาอนุญาตการใช้กล้องในเบราว์เซอร์ แล้วลองอีกครั้ง':'เปิดกล้องไม่ได้ ลองใช้ Chrome/Safari ผ่าน HTTPS หรือเลือกรูป QR','error');});return()=>{cancelled=true;instance.destroy();scanner.current=null;setCameraReady(false);};},[scanning]);
+  useEffect(()=>{if(view!=='scan')setScanning(false);},[view]);
+  function acceptQR(raw:string){
+    try{const parsed=parseQR(raw);const previous=recordRef.current.find(r=>r.rawQR===parsed.raw);if(previous){flash(previous.status==='pending'?'QR นี้อยู่ในรายการรอส่งแล้ว':'เคยรับ QR นี้แล้ว กรุณาตรวจประวัติ','error');return;}
+    setRawQR(parsed.raw);setRecognized(parsed.recognized);setFields({...empty,...read(KEY+'-destination',{}),...parsed.data});setManual(false);setManualText('');setView('scan');setNotice(null);navigator.vibrate?.(100);
+    }catch(e){flash((e as Error).message,'error');}
+  }
+  async function request(apiUrl:string,body:object){
+    if(!validApiUrl(apiUrl))throw new Error('ยังไม่ได้เชื่อมต่อระบบ กรุณาตั้งค่า Web App URL');
+    if(!accessCode.trim())throw new Error('กรุณากรอกรหัสเข้าใช้งานในหน้าตั้งค่า');
+    const response=await fetch(apiUrl,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({...body,accessCode}),redirect:'follow',signal:AbortSignal.timeout(30000)});
+    if(!response.ok)throw new Error('ติดต่อ Google Sheets ไม่สำเร็จ');
+    const result=await response.json();if(!result.ok)throw new Error(result.message||'บันทึกไม่สำเร็จ');return result;
+  }
+  async function syncAll(){
+    if(busy.current)return;busy.current=true;setSending(true);
+    try{
+      const waiting=[...recordRef.current.filter(r=>r.status==='pending')];let success=0;
+      for(const receipt of waiting){
+        try{const result=await request(receipt.apiUrl,{action:'receive',receipt});
+          if(result.id!==receipt.id)throw new Error('คำตอบจากระบบไม่ตรงกับรายการ กรุณาส่งซ้ำ');
+          saveRecords(recordRef.current.map(r=>r.id===receipt.id?{...r,status:result.duplicate?'duplicate':'synced',serverTime:result.serverTime,error:result.duplicate?'QR นี้มีรายการรับเข้าใน Google Sheets แล้ว':undefined}:r));if(!result.duplicate)success++;
+        }catch(e){saveRecords(recordRef.current.map(r=>r.id===receipt.id?{...r,error:(e as Error).message}:r));throw e;}
+      }
+      if(success)flash(`บันทึกใน Google Sheets แล้ว ${success} รายการ`,'success');
+      else if(waiting.length)flash('ตรวจรายการซ้ำแล้ว ดูรายละเอียดในประวัติ','info');
+    }catch(e){flash(`${(e as Error).message} · รายการยังอยู่ในเครื่อง กดส่งอีกครั้งได้`,'error');}
+    finally{busy.current=false;setSending(false);}
+  }
+  async function submit(event:React.FormEvent){
+    event.preventDefault();if(busy.current)return;
+    const receipt:Receipt={...fields,id:crypto.randomUUID(),rawQR,employee:employee.trim(),createdAt:new Date().toISOString(),status:'pending',apiUrl:config.apiUrl};
+    const issue=validateReceipt(receipt);if(issue){flash(issue,'error');return;}
+    if(!validApiUrl(config.apiUrl)||!accessCode.trim()){flash('กรุณาตั้งค่าการเชื่อมต่อและรหัสเข้าใช้งานก่อนรับพาร์ท','error');setView('settings');return;}
+    if(recordRef.current.some(r=>r.rawQR===rawQR)){flash('QR นี้อยู่ในประวัติแล้ว','error');return;}
+    try{put(KEY+'-employee',employee.trim());put(KEY+'-destination',{warehouse:fields.warehouse,location:fields.location});saveRecords([receipt,...recordRef.current]);setRawQR('');setFields({...empty,warehouse:fields.warehouse,location:fields.location});}
+    catch{flash('พื้นที่จัดเก็บในเครื่องไม่พร้อม ยังไม่ได้บันทึก กรุณาตรวจเบราว์เซอร์','error');return;}
+    if(navigator.onLine)await syncAll();else flash('เก็บรายการไว้ในเครื่องแล้ว เมื่อมีอินเทอร์เน็ตให้กด “ส่งรายการรอ”','info');
+  }
+  const field=(key:keyof Fields,label:string,required=false,placeholder='',type='text')=><label className={key==='materialName'||key==='notes'?'wide':''}>{label}{required&&<span className="required"> *</span>}<input type={type} required={required} value={fields[key]} onChange={e=>setFields({...fields,[key]:e.target.value})} placeholder={placeholder} maxLength={500} {...(type==='number'?{min:0.001,step:'any',inputMode:'decimal' as const}:{})}/></label>;
+  const navigation=(<><button className={view==='scan'?'active':''} onClick={()=>setView('scan')}><ScanLine size={20}/><span>รับพาร์ท</span><ChevronRight className="nav-arrow" size={16}/></button><button className={view==='history'?'active':''} onClick={()=>setView('history')}><History size={20}/><span>ประวัติการรับ</span>{pending.length>0&&<b className="count">{pending.length}</b>}</button><button className={view==='settings'?'active':''} onClick={()=>{setConfigDraft(config);setView('settings');}}><Settings size={20}/><span>ตั้งค่า</span></button></>);
+  return <div className="app-shell">
+    <aside className="sidebar"><a className="brand" href="./"><span className="brand-icon"><Box size={25}/></span><span>WH<span className="brand-light"> Receive</span><small>WAREHOUSE OPERATIONS</small></span></a><div className="nav-caption">พื้นที่ทำงาน</div><nav>{navigation}</nav><div className="sidebar-bottom"><div className="system-dot"/>ระบบรับพาร์ทเข้าคลัง<small>QR RECEIVING · V1.0</small></div></aside>
+    <div className="workspace"><header className="topbar"><span className="breadcrumb">Warehouse <ChevronRight size={14}/><strong>{view==='scan'?'รับพาร์ทเข้าคลัง':view==='history'?'ประวัติการรับ':'ตั้งค่าการเชื่อมต่อ'}</strong></span><span className={'connection '+(!online?'offline':'')}><i/>{online?'ออนไลน์':'ออฟไลน์'}</span></header>
+    <main><div className="page-heading"><div><div className="eyebrow">{view==='scan'?'INBOUND RECEIVING':view==='history'?'RECEIVING HISTORY':'WORKSPACE SETTINGS'}</div><h1>{view==='scan'?'รับพาร์ทเข้าคลัง':view==='history'?'ประวัติการรับพาร์ท':'ตั้งค่าการเชื่อมต่อ'}</h1><p>{view==='scan'?'สแกนป้าย ตรวจสอบข้อมูล แล้วรับพาร์ทเข้าคลัง':view==='history'?'รายการที่บันทึกจากอุปกรณ์นี้':'เชื่อมต่อ Google Sheets และระบุผู้รับพาร์ท'}</p></div><div className="date-label">{new Date().toLocaleDateString('th-TH',{day:'numeric',month:'long',year:'numeric'})}</div></div>
+    {notice&&<div className={'notice '+notice.type} role="status">{notice.type==='success'?<Check size={20}/>:<CircleAlert size={20}/>}<span>{notice.message}</span><button aria-label="ปิดข้อความ" onClick={()=>setNotice(null)}><X size={18}/></button></div>}
+    {view!=='settings'&&<div className="stats"><div><span className="stat-icon green"><PackageCheck size={21}/></span><div><span>รับสำเร็จวันนี้</span><strong>{completed.length}<small> รายการ</small></strong></div></div><div><span className="stat-icon amber"><RotateCw size={20}/></span><div><span>รอส่งข้อมูล</span><strong>{pending.length}<small> รายการ</small></strong></div>{pending.length>0&&<button className="text-button" disabled={sending||!online} onClick={syncAll}>{sending?'กำลังส่ง…':'ส่งรายการรอ'}<ArrowUpRight size={16}/></button>}</div><div className="sheet-stat"><span className="stat-icon neutral"><Box size={20}/></span><div><span>ปลายทางข้อมูล</span><strong className="stat-destination">Google Sheets</strong><small>{config.apiUrl?'ตั้งค่าปลายทางแล้ว':'รอเชื่อมต่อระบบ'}</small></div><button className="icon-button" aria-label="ตั้งค่าปลายทาง" onClick={()=>setView('settings')}><ArrowUpRight size={20}/></button></div></div>}
+    {view==='scan'&&<>
+      {!config.apiUrl&&<div className="setup-strip"><span><CircleAlert size={17}/>ตั้งค่าการเชื่อมต่อ Google Sheets ก่อนบันทึกรายการแรก</span><button onClick={()=>setView('settings')}>ตั้งค่าระบบ <ArrowRight size={16}/></button></div>}
+      <div className="receiving-grid"><section className="panel scan-panel"><div className="panel-heading"><h2><span className="step-number">01</span>สแกน QR code</h2><span className="micro-label">PART LABEL</span></div>
+        <div className={'viewfinder '+(scanning?'is-scanning':'')}>
+          {scanning?<><video ref={video} muted playsInline/><div className="live-tag"><i/>{cameraReady?'กล้องพร้อมสแกน':'กำลังเปิดกล้อง…'}</div><button className="stop-camera" onClick={()=>setScanning(false)}>ปิดกล้อง <X size={16}/></button></>:<><div className="scan-corners"><ScanQrCode size={66} strokeWidth={1.25}/></div><h3>{rawQR?'อ่าน QR code แล้ว':'พร้อมรับพาร์ทชิ้นถัดไป'}</h3><p>{rawQR?'ตรวจสอบข้อมูลทางด้านขวาก่อนยืนยัน':'วาง QR code บนป้ายให้อยู่ในกรอบ'}</p><button className="lime-button" onClick={()=>{setNotice(null);setScanning(true);}}><Camera size={19}/>{rawQR?'สแกนใหม่':'เปิดกล้องสแกน'}<ArrowRight size={18}/></button><span className="camera-note">ใช้กล้องหลังของโทรศัพท์</span></>}
+        </div><div className="scan-options"><button onClick={()=>file.current?.click()}><ImagePlus size={18}/>เลือกรูป QR</button><span/><button onClick={()=>setManual(!manual)}><Keyboard size={18}/>กรอกรหัสเอง</button></div>
+        <input ref={file} hidden type="file" accept="image/*" onChange={async e=>{const uploaded=e.target.files?.[0];if(!uploaded)return;setScanning(false);try{const result=await QrScanner.scanImage(uploaded,{returnDetailedScanResult:true});acceptQR(result.data);}catch{flash('อ่าน QR ในภาพไม่ได้ กรุณาเลือกภาพที่เห็น QR เต็มรูป หรือกรอกรหัสเอง','error');}e.target.value='';}}/>
+        {manual&&<form className="manual-form" onSubmit={e=>{e.preventDefault();acceptQR(manualText);}}><label>ข้อความจาก QR / รหัสบนป้าย<textarea required value={manualText} onChange={e=>setManualText(e.target.value)} maxLength={4096} placeholder="สแกนด้วยเครื่องอ่าน หรือพิมพ์รหัสบนป้าย"/></label><button className="secondary-button">ใช้รหัสนี้ <ArrowRight size={16}/></button></form>}
+        <div className="scan-tip"><ScanLine size={21}/><p>ให้เห็น QR เต็มกรอบและหลีกเลี่ยงแสงสะท้อน<br/><span>ตรวจจำนวนจริงทุกครั้งก่อนยืนยันรับเข้า</span></p></div>
+      </section><section className="panel detail-panel"><div className="panel-heading"><h2><span className="step-number">02</span>ตรวจสอบและรับเข้า</h2><span className={'pill '+(rawQR?'ready':'')}>{rawQR?'อ่านรหัสแล้ว':'รอสแกน'}</span></div>
+        {!rawQR?<div className="empty-detail"><div><Box size={39} strokeWidth={1.3}/></div><h3>ข้อมูลพาร์ทจะแสดงที่นี่</h3><p>เปิดกล้องสแกน QR บนป้ายพาร์ท<br/>หรือเลือกกรอกรหัสเองเพื่อเริ่มรับเข้า</p><span><ScanLine size={15}/> สแกน <ArrowRight size={14}/> ตรวจสอบ <ArrowRight size={14}/> รับเข้า</span></div>:<form ref={form} className="receipt-form" onSubmit={submit}>
+          <div className="raw-code"><span>QR ต้นฉบับ</span><code>{rawQR}</code></div>{!recognized&&<p className="form-note">QR นี้ยังไม่มีรูปแบบแยกข้อมูลที่รู้จัก กรุณากรอกข้อมูลตามป้ายด้านล่าง</p>}
+          <div className="form-grid">{field('materialCode','Material code',true)}{field('lotNumber','Lot number',true)}{field('materialName','Material name')}{field('specification','Specification')}{field('warehouse','คลังปลายทาง',true)}{field('location','ตำแหน่งจัดเก็บ',true)}{field('quantity','จำนวนรับจริง',true,'0','number')}{field('unit','หน่วย',true)}<label>ชื่อ / รหัสผู้รับ <span className="required">*</span><input required value={employee} onChange={e=>setEmployee(e.target.value)} placeholder="ระบุผู้รับพาร์ท" maxLength={100}/></label>{field('notes','หมายเหตุ')}</div>
+          <div className="form-actions"><button type="button" className="text-button muted" onClick={()=>setRawQR('')}>ยกเลิก</button><button className="primary-button" disabled={sending}>{sending?<LoaderCircle className="spin" size={19}/>:<PackageCheck size={19}/>}ยืนยันรับเข้าคลัง<ArrowRight size={18}/></button></div>
+        </form>}
+      </section></div>
+      <section className="panel recent-panel"><div className="panel-heading"><h2>รายการล่าสุด</h2><button className="text-button" onClick={()=>setView('history')}>ดูประวัติทั้งหมด <ArrowRight size={16}/></button></div>{records.length?renderRows(records.slice(0,3)):<div className="empty-history"><History size={23}/><span>ยังไม่มีรายการรับพาร์ทจากอุปกรณ์นี้</span><small>รายการจะแสดงหลังจากยืนยันรับเข้า</small></div>}</section>
+    </>}
+    {view==='history'&&<section className="panel"><div className="panel-heading"><h2>รายการจากอุปกรณ์นี้ <span className="muted">({records.length})</span></h2><button className="secondary-button" onClick={syncAll} disabled={sending||!pending.length||!online}><RotateCw size={16} className={sending?'spin':''}/>{sending?'กำลังส่ง…':'ส่งรายการรอ'}</button></div><p className="history-note">ประวัติทั้งหมดจากทุกเครื่องอยู่ใน Google Sheets · รายการรอส่งเก็บอยู่ในเบราว์เซอร์นี้ อย่าล้างข้อมูลเว็บไซต์ก่อนส่งสำเร็จ</p>{records.length?renderRows(records):<div className="empty-history"><History size={28}/>ยังไม่มีรายการ</div>}</section>}
+    {view==='settings'&&<div className="settings-grid"><section className="panel"><div className="panel-heading"><h2><Settings size={20}/>การเชื่อมต่อ</h2><span className="micro-label">GOOGLE SHEETS</span></div><form className="settings-form" onSubmit={e=>{e.preventDefault();if(!validApiUrl(configDraft.apiUrl)){flash('URL ต้องเป็น https://script.google.com/macros/s/…/exec','error');return;}if(configDraft.sheetUrl&&!/^https:\/\/docs\.google\.com\/spreadsheets\/d\/[\w-]+(?:\/.*)?$/.test(configDraft.sheetUrl)){flash('ลิงก์ชีตต้องเป็น Google Sheets URL','error');return;}try{put(KEY+'-config',configDraft);put(KEY+'-employee',employee.trim());sessionStorage.setItem(KEY+'-access',accessCode);setConfig(configDraft);flash('บันทึกการตั้งค่าแล้ว กดทดสอบการเชื่อมต่อก่อนเริ่มใช้งาน','success');}catch{flash('บันทึกการตั้งค่าไม่ได้ กรุณาอนุญาตพื้นที่จัดเก็บของเบราว์เซอร์','error');}}}>
+      <label>ชื่อ / รหัสผู้รับพาร์ท<input required maxLength={100} value={employee} onChange={e=>setEmployee(e.target.value)} placeholder="เช่น WH-001"/></label><label>Web App URL<input required type="url" value={configDraft.apiUrl} onChange={e=>setConfigDraft({...configDraft,apiUrl:e.target.value.trim()})} placeholder="https://script.google.com/macros/s/…/exec"/><small>ใช้ URL ที่ได้จากการ Deploy Google Apps Script</small></label><label>ลิงก์ Google Sheets<input type="url" value={configDraft.sheetUrl} onChange={e=>setConfigDraft({...configDraft,sheetUrl:e.target.value.trim()})} placeholder="https://docs.google.com/spreadsheets/d/…"/></label><label>รหัสเข้าใช้งาน<LockKeyhole size={15}/><input required type="password" autoComplete="off" value={accessCode} onChange={e=>setAccessCode(e.target.value)} placeholder="รหัสที่ผู้ดูแลกำหนด"/><small>จำรหัสไว้เฉพาะการเปิดใช้งานครั้งนี้</small></label><div className="settings-actions"><button className="primary-button"><Check size={18}/>บันทึกการตั้งค่า</button><button type="button" className="secondary-button" disabled={testing} onClick={async()=>{setTesting(true);try{await request(configDraft.apiUrl,{action:'ping'});flash('เชื่อมต่อ Google Sheets สำเร็จ พร้อมรับพาร์ท','success');}catch(e){flash((e as Error).message,'error');}finally{setTesting(false);}}}>{testing?<LoaderCircle className="spin" size={17}/>:<Wifi size={17}/>}ทดสอบการเชื่อมต่อ</button></div>
+    </form></section><aside className="setup-help"><span className="help-icon"><Box size={28}/></span><h2>เริ่มต้นใช้งาน</h2><ol><li>ผู้ดูแลเชื่อม Google Sheets กับ Apps Script</li><li>ใส่ URL ระบบและรหัสเข้าใช้งานที่ได้รับ</li><li>ทดสอบการเชื่อมต่อ แล้วเริ่มสแกนได้เลย</li></ol><p>ใช้ Chrome บน Android หรือ Safari บน iPhone และอนุญาตกล้องเมื่อเริ่มสแกน</p></aside></div>}
+    <footer><span><Box size={14}/> WH Receive</span><span>ข้อมูลการรับเข้า · Google Sheets{config.sheetUrl&&/^https:\/\/docs\.google\.com\/spreadsheets\/d\//.test(config.sheetUrl)&&<a href={config.sheetUrl} target="_blank" rel="noreferrer">เปิดชีต <ArrowUpRight size={14}/></a>}</span></footer>
+    </main></div><nav className="mobile-nav">{navigation}</nav>
+  </div>;
+  function renderRows(items:Receipt[]){return <div className="records-list">{items.map(r=><div className="record-row" key={r.id}><span className="record-icon"><Box size={21}/></span><div className="record-main"><strong>{r.materialCode}</strong><span>Lot {r.lotNumber} · {r.location}</span>{r.error&&<small className="error-text">{r.error}</small>}</div><div className="record-quantity"><strong>{r.quantity} <small>{r.unit}</small></strong><span>{date(r.createdAt)}</span></div><span className={'record-status '+r.status}>{r.status==='synced'?<><Check size={14}/>บันทึกแล้ว</>:r.status==='duplicate'?'รายการซ้ำ':<><RotateCw size={13}/>รอส่ง</>}</span></div>)}</div>;}
+}

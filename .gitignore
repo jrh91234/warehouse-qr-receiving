@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env*
+!.env.example
+.clasp.json
+*.local.*
+outputs/
+tmp/
+artifacts/
+*.tsbuildinfo

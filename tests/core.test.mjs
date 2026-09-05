@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {parseQR,validateReceipt,validApiUrl} from '../src/core.mjs';
+test('structured QR preserves leading zeros and quantity',()=>{const result=parseQR('{"materialCode":"0012AB","lot":"000123","qty":25}');assert.deepEqual(result.data,{materialCode:'0012AB',lotNumber:'000123',quantity:'25'});});
+test('key value QR supports real label fields',()=>{assert.deepEqual(parseQR('Material code: P-123|Lot Number: 00021|Quantity: 25|Unit: EA').data,{materialCode:'P-123',lotNumber:'00021',quantity:'25',unit:'EA'});});
+test('unknown concatenated QR is kept intact without guessed fields',()=>{const r=parseQR('P1232026083001000058');assert.equal(r.recognized,false);assert.deepEqual(r.data,{});assert.equal(r.raw,'P1232026083001000058');});
+test('QR payload cannot supply unrelated fields',()=>{assert.deepEqual(parseQR('{"apiUrl":"https://evil.test","employee":"bad","quantity":2}').data,{quantity:'2'});});
+test('rejects empty and oversized QR',()=>{assert.throws(()=>parseQR('  '));assert.throws(()=>parseQR('x'.repeat(4097)));});
+test('quantity must be positive and all receiving keys present',()=>{const r={rawQR:'Q1',employee:'A',materialCode:'P1',lotNumber:'L1',warehouse:'WH',location:'A1',unit:'EA',quantity:'25'};assert.equal(validateReceipt(r),'');for(const q of ['',0,-1,'Infinity','bad'])assert.notEqual(validateReceipt({...r,quantity:q}),'');assert.notEqual(validateReceipt({...r,location:''}),'');});
+test('only direct HTTPS Apps Script deployment URLs accepted',()=>{assert.ok(validApiUrl('https://script.google.com/macros/s/ABC_xyz/exec'));for(const url of ['http://script.google.com/macros/s/abc/exec','https://evil.test/macros/s/abc/exec','https://script.google.com/macros/s/abc/dev','https://script.google.com/macros/s/abc/exec?x=1'])assert.equal(validApiUrl(url),false);});
