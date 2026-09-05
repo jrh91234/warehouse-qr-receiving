@@ -6,6 +6,7 @@ const fields = {
   warehouse: ['warehouse','คลัง'], location: ['location','ตำแหน่ง'],
   quantity: ['quantity','qty','จำนวน'], unit: ['unit','หน่วย']
 };
+export const LOCATION_CODES = Array.from({length: 100}, (_, index) => `FR${String(index + 1).padStart(3, '0')}`);
 const normalized = key => key.toLowerCase().replace(/[\s_\-]/g, '');
 export function parseQR(raw) {
   const text = String(raw).trim();
@@ -39,6 +40,7 @@ export function validateReceipt(record) {
   }
   if(!Number.isFinite(Number(record.quantity)) || Number(record.quantity) <= 0 || Number(record.quantity) > 1000000000) return 'จำนวนต้องมากกว่า 0 และไม่เกิน 1,000,000,000';
   if(String(record.rawQR).length > 4096) return 'ข้อมูล QR ยาวเกินกำหนด';
+  if(!LOCATION_CODES.includes(String(record.location ?? '').trim().toUpperCase())) return 'ตำแหน่งจัดเก็บต้องเลือก FR001-FR100';
   for(const key of ['employee','materialCode','materialName','specification','lotNumber','warehouse','location','unit','notes']) if(String(record[key] ?? '').length > 500) return 'ข้อความแต่ละช่องต้องไม่เกิน 500 ตัวอักษร';
   return '';
 }

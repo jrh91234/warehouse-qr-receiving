@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import {createHash} from 'node:crypto';
 
 const source=fs.readFileSync(new URL('../apps-script/Code.gs',import.meta.url),'utf8');
-const sample={id:'11111111-1111-4111-8111-111111111111',rawQR:'QR-auth-001',employee:'WH-001',materialCode:'000123',materialName:'Part',specification:'',lotNumber:'0001',warehouse:'Main',location:'A01',quantity:25,unit:'EA',notes:'',createdAt:'2026-09-05T00:00:00Z'};
+const sample={id:'11111111-1111-4111-8111-111111111111',rawQR:'QR-auth-001',employee:'WH-001',materialCode:'000123',materialName:'Part',specification:'',lotNumber:'0001',warehouse:'Main',location:'FR001',quantity:25,unit:'EA',notes:'',createdAt:'2026-09-05T00:00:00Z'};
 
 function backend(){
   const rowsBySheet={Receipts:[['Request ID','Received at','Scanned at','Employee','Raw QR','Material code','Material name','Specification','Lot number','Warehouse','Location','Quantity','Unit','Notes']]};

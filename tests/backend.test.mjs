@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import fs from 'node:fs';
 const source=fs.readFileSync(new URL('../apps-script/Code.gs',import.meta.url),'utf8');
-const sample={id:'11111111-1111-4111-8111-111111111111',rawQR:'QR-unique-001',employee:'WH001',materialCode:'000123',materialName:'Part',specification:'',lotNumber:'0001',warehouse:'Main',location:'A01',quantity:25,unit:'EA',notes:'',createdAt:'2026-09-05T00:00:00Z'};
+const sample={id:'11111111-1111-4111-8111-111111111111',rawQR:'QR-unique-001',employee:'WH001',materialCode:'000123',materialName:'Part',specification:'',lotNumber:'0001',warehouse:'Main',location:'FR001',quantity:25,unit:'EA',notes:'',createdAt:'2026-09-05T00:00:00Z'};
 function backend(){
  const rows=[];let released=0;
  const ctx={ContentService:{MimeType:{JSON:'JSON'},createTextOutput:text=>({text,setMimeType(){return this;}})},PropertiesService:{getScriptProperties:()=>({getProperty:key=>({ACCESS_CODE:'testing-code-123456',SPREADSHEET_ID:'test-sheet'}[key])})},LockService:{getScriptLock:()=>({tryLock:()=>true,releaseLock:()=>released++})}};

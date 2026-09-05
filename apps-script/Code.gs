@@ -200,6 +200,7 @@ function validate_(r) {
     if(required.indexOf(key)>=0&&!r[key]) throw new Error('กรุณาระบุ '+key);
     if(r[key].length>(key==='rawQR'?4096:500)) throw new Error('ข้อมูล '+key+' ยาวเกินกำหนด');
   });
+  if(!/^FR(?:00[1-9]|0[1-9][0-9]|100)$/.test(r.location)) throw new Error('ตำแหน่งจัดเก็บต้องเลือก FR001-FR100');
   if(!isFinite(Number(r.quantity))||Number(r.quantity)<=0||Number(r.quantity)>1000000000) throw new Error('จำนวนรับไม่ถูกต้อง');
   if(typeof r.createdAt!=='string'||!isFinite(Date.parse(r.createdAt))) throw new Error('เวลาสแกนไม่ถูกต้อง');
   return r;
