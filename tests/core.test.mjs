@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {parseQR,validateReceipt,validApiUrl} from '../src/core.mjs';
 test('structured QR preserves leading zeros and quantity',()=>{const result=parseQR('{"materialCode":"0012AB","lot":"000123","qty":25}');assert.deepEqual(result.data,{materialCode:'0012AB',lotNumber:'000123',quantity:'25'});});
 test('key value QR supports real label fields',()=>{assert.deepEqual(parseQR('Material code: P-123|Lot Number: 00021|Quantity: 25|Unit: EA').data,{materialCode:'P-123',lotNumber:'00021',quantity:'25',unit:'EA'});});
+test('warehouse star QR maps material, lot and single package quantity',()=>{assert.deepEqual(parseQR('1005QT00197*2026083001*0002-2').data,{materialCode:'1005QT00197',lotNumber:'2026083001',quantity:'1',unit:'EA'});});
 test('unknown concatenated QR is kept intact without guessed fields',()=>{const r=parseQR('P1232026083001000058');assert.equal(r.recognized,false);assert.deepEqual(r.data,{});assert.equal(r.raw,'P1232026083001000058');});
 test('QR payload cannot supply unrelated fields',()=>{assert.deepEqual(parseQR('{"apiUrl":"https://evil.test","employee":"bad","quantity":2}').data,{quantity:'2'});});
 test('rejects empty and oversized QR',()=>{assert.throws(()=>parseQR('  '));assert.throws(()=>parseQR('x'.repeat(4097)));});

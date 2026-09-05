@@ -23,6 +23,12 @@ export function parseQR(raw) {
     const item = Object.entries(source).find(([key]) => aliases.includes(normalized(key)));
     if(item && ['string','number'].includes(typeof item[1])) data[field] = String(item[1]).trim();
   }
+  // The warehouse labels also use: materialCode*lotNumber*packageReference.
+  // The final token identifies the package; quantity on this label is one EA.
+  if(!Object.keys(data).length) {
+    const star = text.match(/^([^*]{2,80})\*([A-Za-z0-9_-]{2,80})\*([^*]{1,80})$/);
+    if(star) { data.materialCode=star[1].trim(); data.lotNumber=star[2].trim(); data.quantity='1'; data.unit='EA'; }
+  }
   return {data, raw: text, recognized: Object.keys(data).length > 0};
 }
 export function validateReceipt(record) {
