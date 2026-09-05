@@ -75,8 +75,9 @@ export default function App(){
       const requestId=crypto.randomUUID();
       const frame=document.createElement('iframe');
       const formElement=document.createElement('form');
+      let settled=false,graceTimer:number|null=null;
       const timeout=window.setTimeout(()=>finish(new Error('การเชื่อมต่อใช้เวลานานเกินไป กรุณาลองอีกครั้ง')),30000);
-      frame.name='wh-receive-'+requestId;frame.hidden=true;frame.title='WH Receive response';
+      frame.name='wh-receive-'+requestId;frame.hidden=true;frame.title='WH Receive response';frame.src='about:blank';
       formElement.method='post';formElement.action=apiUrl;formElement.target=frame.name;formElement.hidden=true;
       const add=(name:string,value:string)=>{const input=document.createElement('input');input.type='hidden';input.name=name;input.value=value;formElement.append(input);};
       add('transport','iframe');add('requestId',requestId);add('origin',window.location.origin);add('payload',JSON.stringify(payload));
@@ -84,8 +85,14 @@ export default function App(){
         if(event.source!==frame.contentWindow||!event.data||event.data.type!=='wh-receive-response'||event.data.requestId!==requestId)return;
         finish(null,event.data.result);
       };
-      function finish(error:Error|null,result?:any){window.clearTimeout(timeout);window.removeEventListener('message',onMessage);formElement.remove();frame.remove();if(error)reject(error);else resolve(result);}
-      window.addEventListener('message',onMessage);document.body.append(frame,formElement);formElement.submit();
+      // Google rejects the request (e.g. deployment access isn't "Anyone", or the URL points to a stale/deleted
+      // deployment) before our code ever runs. That still loads a page into the frame, just not ours, so give up
+      // fast instead of waiting out the full timeout once a response has clearly arrived without a postMessage.
+      const onResponseLoad=()=>{if(graceTimer===null)graceTimer=window.setTimeout(()=>finish(new Error('เชื่อมต่อ Google Apps Script ไม่สำเร็จ กรุณาตรวจสอบว่า Deploy เว็บแอปแบบ "Anyone" และ URL ที่ตั้งค่าเป็นเวอร์ชันล่าสุด')),1500);};
+      function finish(error:Error|null,result?:any){if(settled)return;settled=true;window.clearTimeout(timeout);if(graceTimer!==null)window.clearTimeout(graceTimer);window.removeEventListener('message',onMessage);formElement.remove();frame.remove();if(error)reject(error);else resolve(result);}
+      window.addEventListener('message',onMessage);
+      frame.addEventListener('load',function onBlankLoad(){frame.removeEventListener('load',onBlankLoad);frame.addEventListener('load',onResponseLoad);document.body.append(formElement);formElement.submit();});
+      document.body.append(frame);
     });
   }
   async function request(apiUrl:string,body:object,includeCredentials=true){
