@@ -36,9 +36,7 @@ function doPost(e) {
     if(action==='ping') return json_({ok:true,version:'1.2.0',user:auth.username||null});
     if(action==='receiveBatch') return receiveBatch_(sheet,body.receipts,auth);
     if(action!=='receive') throw new Error('คำสั่งไม่ถูกต้อง');
-    var receipt=body.receipt||{};
-    if(auth.username) receipt.employee=auth.username;
-    receipt=validate_(receipt);
+    var receipt=bindEmployee_(body.receipt||{},auth);
     var lock=LockService.getScriptLock();
     if(!lock.tryLock(25000)) throw new Error('มีรายการรับเข้าพร้อมกัน กรุณาลองส่งอีกครั้ง');
     try {
@@ -82,7 +80,7 @@ function requireAccessCode_(body,properties) {
 }
 function login_(body,book,properties) {
   var username=String(body.username||'').trim(), password=String(body.password||'');
-  if(!/^[A-Za-z0-9._-]{2,100}$/.test(username)||password.length<8||password.length>128) throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
+  if(!/^[A-Za-z0-9ก-๙._-]{2,100}$/.test(username)||password.length<8||password.length>128) throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
   var sheet=usersSheet_(book), row=findUser_(sheet,username);
   if(!row||!isActive_(row.values[3])||!equal_(String(row.values[1]||''),passwordHash_(row.values[0],password,properties))) throw new Error('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง');
   var now=new Date(); sheet.getRange(row.row,6).setValue(now);
@@ -93,7 +91,7 @@ function login_(body,book,properties) {
 function bootstrapAdmin_(body,book,properties) {
   var username=String(body.username||'').trim(), password=String(body.password||''), sheet=usersSheet_(book);
   if(sheet.getLastRow()>1) throw new Error('มีบัญชีผู้ใช้งานแล้ว กรุณาให้ผู้ดูแลระบบเข้าสู่ระบบ');
-  if(!/^[A-Za-z0-9._-]{2,100}$/.test(username)||password.length<8||password.length>128) throw new Error('ชื่อผู้ใช้ต้องเป็นภาษาอังกฤษ/ตัวเลข และรหัสผ่านอย่างน้อย 8 ตัวอักษร');
+  if(!/^[A-Za-z0-9ก-๙._-]{2,100}$/.test(username)||password.length<8||password.length>128) throw new Error('ชื่อผู้ใช้ต้องเป็นภาษาอังกฤษ/ไทย/ตัวเลข และรหัสผ่านอย่างน้อย 8 ตัวอักษร');
   var now=new Date(); sheet.getRange(2,1,1,USER_HEADERS.length).setValues([[username,passwordHash_(username,password,properties),'admin',true,now,'']]);
   return json_({ok:true,message:'สร้างบัญชีผู้ดูแลแล้ว'});
 }
@@ -106,7 +104,7 @@ function listUsers_(auth,book) {
 function upsertUser_(auth,body,book,properties) {
   requireAdmin_(auth);
   var incoming=body.user||{}, username=String(incoming.username||'').trim(), password=String(incoming.password||''), role=String(incoming.role||'receiver')==='admin'?'admin':'receiver', active=incoming.active!==false;
-  if(!/^[A-Za-z0-9._-]{2,100}$/.test(username)) throw new Error('ชื่อผู้ใช้ต้องเป็นภาษาอังกฤษ/ตัวเลข 2-100 ตัวอักษร');
+  if(!/^[A-Za-z0-9ก-๙._-]{2,100}$/.test(username)) throw new Error('ชื่อผู้ใช้ต้องเป็นภาษาอังกฤษ/ไทย/ตัวเลข 2-100 ตัวอักษร');
   var sheet=usersSheet_(book), found=findUser_(sheet,username), now=new Date();
   if(!found) {
     if(password.length<8||password.length>128) throw new Error('รหัสผ่านต้องยาว 8-128 ตัวอักษร');
@@ -154,7 +152,7 @@ function dateValue_(value) {return value instanceof Date?value.toISOString():val
 
 function receiveBatch_(sheet,receipts,auth) {
   if(!Array.isArray(receipts)||receipts.length<1||receipts.length>20) throw new Error('จำนวนรายการต่อชุดต้องอยู่ระหว่าง 1 ถึง 20');
-  receipts=receipts.map(function(r){if(auth.username) r.employee=auth.username;return validate_(r);});
+  receipts=receipts.map(function(r){return bindEmployee_(r,auth);});
   var lock=LockService.getScriptLock();
   if(!lock.tryLock(25000)) throw new Error('มีรายการรับเข้าพร้อมกัน กรุณาลองส่งอีกครั้ง');
   try {
@@ -180,6 +178,14 @@ function receiveBatch_(sheet,receipts,auth) {
     }
     return json_({ok:true,results:results});
   } finally { lock.releaseLock(); }
+}
+
+function bindEmployee_(receipt,auth) {
+  if(auth&&auth.username) {
+    if(receipt&&receipt.employee&&String(receipt.employee).trim()!==String(auth.username)) throw new Error('รายการรอส่งเป็นของผู้ใช้อื่น กรุณาเข้าสู่ระบบด้วย username เดิม');
+    receipt.employee=auth.username;
+  }
+  return validate_(receipt);
 }
 
 function validate_(r) {
